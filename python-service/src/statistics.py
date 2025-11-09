@@ -65,9 +65,7 @@ class StatisticsAggregator:
             average_score=round(total_score / file_count, 2) if file_count > 0 else 0.0,
             total_issues=total_issues,
             issues_by_severity=issues_by_severity,
-            average_complexity=round(total_complexity / file_count, 2)
-            if file_count > 0
-            else 0.0,
+            average_complexity=round(total_complexity / file_count, 2) if file_count > 0 else 0.0,
             files_with_high_complexity=files_with_high_complexity,
             total_suggestions=total_suggestions,
         )
