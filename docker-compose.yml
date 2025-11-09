@@ -1,0 +1,45 @@
+version: '3.8'
+
+services:
+  go-service:
+    build:
+      context: ./go-service
+      dockerfile: Dockerfile
+    ports:
+      - "8080:8080"
+    environment:
+      - PORT=8080
+    networks:
+      - polyglot-network
+
+  python-service:
+    build:
+      context: ./python-service
+      dockerfile: Dockerfile
+    ports:
+      - "8081:8081"
+    environment:
+      - PORT=8081
+    networks:
+      - polyglot-network
+
+  ruby-service:
+    build:
+      context: ./ruby-service
+      dockerfile: Dockerfile
+    ports:
+      - "8082:8082"
+    environment:
+      - PORT=8082
+      - GO_SERVICE_URL=http://go-service:8080
+      - PYTHON_SERVICE_URL=http://python-service:8081
+    depends_on:
+      - go-service
+      - python-service
+    networks:
+      - polyglot-network
+
+networks:
+  polyglot-network:
+    driver: bridge
+
