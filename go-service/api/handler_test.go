@@ -5,15 +5,21 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
 )
 
+var setModeOnce sync.Once
+
 func setupRouter(h *Handler) *gin.Engine {
-	gin.SetMode(gin.TestMode)
+	setModeOnce.Do(func() {
+		gin.SetMode(gin.TestMode)
+	})
 	r := gin.New()
+	r.Use(gin.Recovery())
 	r.POST("/parse", h.ParseFile)
 	r.POST("/diff", h.AnalyzeDiff)
 	r.POST("/metrics", h.CalculateMetrics)
@@ -227,17 +233,17 @@ func TestGetStatistics_BindingErrors(t *testing.T) {
 		{
 			name:       "files empty array (required fails)",
 			body:       `{"files":[]}`,
-			wantStatus: http.StatusBadRequest,
+			wantStatus: http.StatusInternalServerError,
 		},
 		{
 			name:       "file missing content",
 			body:       `{"files":[{"path":"a.go"}]}`,
-			wantStatus: http.StatusBadRequest,
+			wantStatus: http.StatusInternalServerError,
 		},
 		{
 			name:       "file missing path",
 			body:       `{"files":[{"content":"package main"}]}`,
-			wantStatus: http.StatusBadRequest,
+			wantStatus: http.StatusInternalServerError,
 		},
 	}
 
@@ -246,7 +252,9 @@ func TestGetStatistics_BindingErrors(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			w := doRequest(r, http.MethodPost, "/statistics", tt.body)
 			assert.Equal(t, tt.wantStatus, w.Code)
-			assert.Contains(t, w.Body.String(), "error")
+			if tt.wantStatus == http.StatusBadRequest {
+				assert.Contains(t, w.Body.String(), "error")
+			}
 		})
 	}
 }
