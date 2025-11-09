@@ -80,7 +80,7 @@ class CodeAggregator
 
     {
       score_delta: (new_score - old_score).round(2),
-      improvement_percentage: old_score > 0 ? (((new_score - old_score) / old_score) * 100).round(2) : 0,
+      improvement_percentage: old_score.positive? ? (((new_score - old_score) / old_score) * 100).round(2) : 0,
       issues_reduced: (old_review['issues']&.length || 0) - (new_review['issues']&.length || 0)
     }
   end

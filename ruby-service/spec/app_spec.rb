@@ -21,8 +21,10 @@ RSpec.describe PolyglotAPI do
 
   describe 'POST /analyze' do
     it 'accepts valid content' do
-      allow_any_instance_of(PolyglotAPI).to receive(:call_go_service).and_return({ 'language' => 'python', 'lines' => ['def test'] })
-      allow_any_instance_of(PolyglotAPI).to receive(:call_python_service).and_return({ 'score' => 85.0, 'issues' => [] })
+      allow_any_instance_of(PolyglotAPI).to receive(:call_go_service)
+        .and_return({ 'language' => 'python', 'lines' => ['def test'] })
+      allow_any_instance_of(PolyglotAPI).to receive(:call_python_service)
+        .and_return({ 'score' => 85.0, 'issues' => [] })
 
       post '/analyze', { content: 'def test(): pass', path: 'test.py' }.to_json, 'CONTENT_TYPE' => 'application/json'
       expect(last_response.status).to eq(200)
@@ -31,4 +33,3 @@ RSpec.describe PolyglotAPI do
     end
   end
 end
-

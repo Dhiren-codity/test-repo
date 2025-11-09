@@ -50,9 +50,7 @@ class CodeReviewer:
 
             complexity_count += self._count_complexity(line)
 
-        complexity_score = self._calculate_complexity_score(
-            complexity_count, len(lines)
-        )
+        complexity_score = self._calculate_complexity_score(complexity_count, len(lines))
 
         if complexity_score > 0.7:
             suggestions.append("Consider refactoring to reduce cyclomatic complexity")
@@ -125,17 +123,13 @@ class CodeReviewer:
                 count += 1
         return count
 
-    def _calculate_complexity_score(
-        self, complexity_count: int, total_lines: int
-    ) -> float:
+    def _calculate_complexity_score(self, complexity_count: int, total_lines: int) -> float:
         if total_lines == 0:
             return 0.0
         normalized = complexity_count / total_lines
         return min(normalized, 1.0)
 
-    def _calculate_score(
-        self, issues: List[CodeIssue], complexity_score: float
-    ) -> float:
+    def _calculate_score(self, issues: List[CodeIssue], complexity_score: float) -> float:
         base_score = 100.0
 
         error_penalty = sum(10 for issue in issues if issue.severity == "error")
@@ -144,13 +138,7 @@ class CodeReviewer:
 
         complexity_penalty = complexity_score * 20
 
-        score = (
-            base_score
-            - error_penalty
-            - warning_penalty
-            - info_penalty
-            - complexity_penalty
-        )
+        score = base_score - error_penalty - warning_penalty - info_penalty - complexity_penalty
 
         return max(0.0, min(100.0, score))
 
@@ -159,11 +147,7 @@ class CodeReviewer:
         param_match = re.search(r"\(([^)]*)\)", function_code)
         if param_match:
             params_str = param_match.group(1)
-            param_count = (
-                len([p for p in params_str.split(",") if p.strip()])
-                if params_str.strip()
-                else 0
-            )
+            param_count = len([p for p in params_str.split(",") if p.strip()]) if params_str.strip() else 0
         else:
             param_count = 0
 
