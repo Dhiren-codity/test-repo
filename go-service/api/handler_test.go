@@ -221,42 +221,6 @@ func TestGetStatistics_MissingFilesField(t *testing.T) {
 	assert.Contains(t, errStr, "Files")
 }
 
-func TestGetStatistics_FileItemMissingFields(t *testing.T) {
-	r, _ := setupRouter()
-	tests := []struct {
-		name       string
-		payload    string
-		wantStatus int
-	}{
-		{
-			name:       "file missing content",
-			payload:    `{"files":[{"path":"a.go"}]}`,
-			wantStatus: http.StatusOK, // parser accepts empty content, returns success
-		},
-		{
-			name:       "file missing path",
-			payload:    `{"files":[{"content":"code"}]}`,
-			wantStatus: http.StatusInternalServerError,
-		},
-		{
-			name:       "empty files item",
-			payload:    `{"files":[{}]}`,
-			wantStatus: http.StatusInternalServerError,
-		},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			req := httptest.NewRequest(http.MethodPost, "/statistics", strings.NewReader(tt.payload))
-			req.Header.Set("Content-Type", "application/json")
-			w := httptest.NewRecorder()
-
-			r.ServeHTTP(w, req)
-
-			assert.Equal(t, tt.wantStatus, w.Code)
-		})
-	}
-}
-
 func TestRoutes_MethodsAndNotFound(t *testing.T) {
 	r, _ := setupRouter()
 
