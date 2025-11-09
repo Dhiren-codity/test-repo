@@ -1,4 +1,4 @@
-require 'rails_helper' rescue LoadError
+require 'rails_helper' if File.exist?(File.expand_path('../rails_helper.rb', __FILE__))
 require 'spec_helper'
 require 'json'
 require 'time'
