@@ -6,11 +6,13 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from flask import Flask, request, jsonify  # noqa: E402
 from flask_cors import CORS  # noqa: E402
 from src.code_reviewer import CodeReviewer  # noqa: E402
+from src.statistics import StatisticsAggregator  # noqa: E402
 
 app = Flask(__name__)
 CORS(app)
 
 reviewer = CodeReviewer()
+statistics_aggregator = StatisticsAggregator()
 
 
 @app.route("/health", methods=["GET"])
@@ -59,6 +61,29 @@ def review_function():
     result = reviewer.review_function(function_code)
 
     return jsonify(result)
+
+
+@app.route("/statistics", methods=["POST"])
+def get_statistics():
+    data = request.get_json()
+
+    if not data or "files" not in data:
+        return jsonify({"error": "Missing 'files' field"}), 400
+
+    files = data.get("files", [])
+    stats = statistics_aggregator.aggregate_reviews(files)
+
+    return jsonify(
+        {
+            "total_files": stats.total_files,
+            "average_score": stats.average_score,
+            "total_issues": stats.total_issues,
+            "issues_by_severity": stats.issues_by_severity,
+            "average_complexity": stats.average_complexity,
+            "files_with_high_complexity": stats.files_with_high_complexity,
+            "total_suggestions": stats.total_suggestions,
+        }
+    )
 
 
 if __name__ == "__main__":

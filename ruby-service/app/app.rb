@@ -104,6 +104,36 @@ class PolyglotAPI < Sinatra::Base
     )
   end
 
+  post '/dashboard' do
+    begin
+      body = request.body.read
+      request.body.rewind
+      request_data = body.empty? ? params : JSON.parse(body)
+    rescue JSON::ParserError
+      request_data = params
+    end
+    files = request_data['files'] || request_data[:files] || []
+
+    return json(error: 'Missing files array'), 400 if files.empty?
+
+    file_stats = call_go_service('/statistics', { files: files })
+    review_stats = call_python_service('/statistics', { files: files })
+
+    json(
+      timestamp: Time.now.iso8601,
+      file_statistics: file_stats,
+      review_statistics: review_stats,
+      summary: {
+        total_files: file_stats['total_files'] || 0,
+        total_lines: file_stats['total_lines'] || 0,
+        languages: file_stats['languages'] || {},
+        average_quality_score: review_stats['average_score'] || 0.0,
+        total_issues: review_stats['total_issues'] || 0,
+        health_score: calculate_dashboard_health_score(file_stats, review_stats)
+      }
+    )
+  end
+
   private
 
   def check_service_health(url)
@@ -162,5 +192,20 @@ class PolyglotAPI < Sinatra::Base
 
     score = (final_score * 100).round(2)
     score.clamp(0, 100)
+  end
+
+  def calculate_dashboard_health_score(file_stats, review_stats)
+    return 0.0 unless file_stats && review_stats && !file_stats['error'] && !review_stats['error']
+
+    avg_score = review_stats['average_score'] || 0
+    total_issues = review_stats['total_issues'] || 0
+    total_files = file_stats['total_files'] || 1
+    avg_complexity = review_stats['average_complexity'] || 0
+
+    issue_penalty = (total_issues.to_f / total_files) * 2
+    complexity_penalty = avg_complexity * 30
+
+    health_score = avg_score - issue_penalty - complexity_penalty
+    [[health_score, 0].max, 100].min.round(2)
   end
 end
