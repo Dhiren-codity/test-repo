@@ -1,5 +1,4 @@
-import pytest
-from src.code_reviewer import CodeReviewer, CodeIssue
+from src.code_reviewer import CodeReviewer
 
 
 class TestCodeReviewer:
@@ -19,9 +18,7 @@ class TestCodeReviewer:
         code = "x = " + "a" * 150
         result = self.reviewer.review_code(code)
         assert len(result.issues) > 0
-        assert any(
-            issue.message == "Line exceeds 120 characters" for issue in result.issues
-        )
+        assert any(issue.message == "Line exceeds 120 characters" for issue in result.issues)
 
     def test_detect_todo(self):
         code = """def test():

@@ -1,3 +1,5 @@
+# frozen_string_literal: true
+
 require 'sinatra/base'
 require 'sinatra/json'
 require 'rack/cors'
@@ -31,9 +33,15 @@ class PolyglotAPI < Sinatra::Base
   end
 
   post '/analyze' do
-    request_data = JSON.parse(request.body.read)
-    content = request_data['content']
-    path = request_data['path'] || 'unknown'
+    begin
+      body = request.body.read
+      request.body.rewind
+      request_data = body.empty? ? params : JSON.parse(body)
+    rescue JSON::ParserError
+      request_data = params
+    end
+    content = request_data['content'] || request_data[:content]
+    path = request_data['path'] || request_data[:path] || 'unknown'
 
     return json(error: 'Missing content'), 400 unless content
 
@@ -53,9 +61,15 @@ class PolyglotAPI < Sinatra::Base
   end
 
   post '/diff' do
-    request_data = JSON.parse(request.body.read)
-    old_content = request_data['old_content']
-    new_content = request_data['new_content']
+    begin
+      body = request.body.read
+      request.body.rewind
+      request_data = body.empty? ? params : JSON.parse(body)
+    rescue JSON::ParserError
+      request_data = params
+    end
+    old_content = request_data['old_content'] || request_data[:old_content]
+    new_content = request_data['new_content'] || request_data[:new_content]
 
     return json(error: 'Missing old_content or new_content'), 400 unless old_content && new_content
 
@@ -69,8 +83,14 @@ class PolyglotAPI < Sinatra::Base
   end
 
   post '/metrics' do
-    request_data = JSON.parse(request.body.read)
-    content = request_data['content']
+    begin
+      body = request.body.read
+      request.body.rewind
+      request_data = body.empty? ? params : JSON.parse(body)
+    rescue JSON::ParserError
+      request_data = params
+    end
+    content = request_data['content'] || request_data[:content]
 
     return json(error: 'Missing content'), 400 unless content
 
@@ -141,7 +161,7 @@ class PolyglotAPI < Sinatra::Base
     final_score = base_score - complexity_penalty - issue_penalty
 
     score = (final_score * 100).round(2)
-    [[score, 0].max, 100].min
+    score.clamp(0, 100)
   end
 end
 

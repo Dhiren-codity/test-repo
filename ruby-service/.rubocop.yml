@@ -1,6 +1,7 @@
 AllCops:
   TargetRubyVersion: 3.2
   NewCops: enable
+  SuggestExtensions: false
   Exclude:
     - "vendor/**/*"
     - "spec/spec_helper.rb"
@@ -8,7 +9,7 @@ AllCops:
 Style/Documentation:
   Enabled: false
 
-Metrics/LineLength:
+Layout/LineLength:
   Max: 120
 
 Metrics/MethodLength:
@@ -17,5 +18,14 @@ Metrics/MethodLength:
 Metrics/ClassLength:
   Max: 150
 
-Layout/LineLength:
-  Max: 120
+Metrics/AbcSize:
+  Max: 25
+
+Metrics/CyclomaticComplexity:
+  Max: 12
+
+Metrics/PerceivedComplexity:
+  Max: 12
+
+Style/ComparableClamp:
+  Enabled: false
