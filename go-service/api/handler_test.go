@@ -1,7 +1,6 @@
 package api
 
 import (
-	"bytes"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -276,12 +275,13 @@ func TestRoutesExist(t *testing.T) {
 		{http.MethodPost, "/statistics"},
 	}
 	for _, rt := range routes {
-		var body bytes.Buffer
 		rr := httptest.NewRecorder()
-		req := httptest.NewRequest(rt.method, rt.path, &body)
+		var req *http.Request
 		if rt.method == http.MethodPost {
+			req = httptest.NewRequest(rt.method, rt.path, strings.NewReader(`{}`))
 			req.Header.Set("Content-Type", "application/json")
-			req.Body = httptest.NewBody(`{}`)
+		} else {
+			req = httptest.NewRequest(rt.method, rt.path, nil)
 		}
 		r.ServeHTTP(rr, req)
 		// Health should be 200. Others with empty body should be 400.
