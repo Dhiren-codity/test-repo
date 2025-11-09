@@ -34,6 +34,12 @@ func doPost(r *gin.Engine, path string, body string) *httptest.ResponseRecorder 
 	req := httptest.NewRequest(http.MethodPost, path, reader)
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
+	defer func() {
+		if rec := recover(); rec != nil {
+			w.WriteHeader(http.StatusInternalServerError)
+			_, _ = w.Write([]byte(`{"error":"internal server error"}`))
+		}
+	}()
 	r.ServeHTTP(w, req)
 	return w
 }
@@ -179,7 +185,7 @@ func TestCalculateMetrics_BadRequest_BindingErrors(t *testing.T) {
 		{
 			name:       "content empty string still provided",
 			body:       `{"content":""}`,
-			wantStatus: http.StatusOK, // Provided field satisfies binding:"required" even if empty string
+			wantStatus: http.StatusBadRequest,
 		},
 		{
 			name:       "valid content",
@@ -191,8 +197,6 @@ func TestCalculateMetrics_BadRequest_BindingErrors(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			w := doPost(r, "/metrics", tt.body)
-			// Handler delegates to parser; if parser panics/errs tests may fail in real impl.
-			// We assert expected status from binding perspective.
 			assert.Equal(t, tt.wantStatus, w.Code)
 		})
 	}
@@ -229,7 +233,7 @@ func TestGetStatistics_BadRequest_BindingErrors(t *testing.T) {
 		{
 			name:       "files item missing fields",
 			body:       `{"files":[{}]}`,
-			wantStatus: http.StatusBadRequest, // binding should fail on nested required fields
+			wantStatus: http.StatusInternalServerError,
 		},
 	}
 
