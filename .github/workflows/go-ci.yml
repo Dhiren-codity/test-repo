@@ -1,11 +1,13 @@
 name: Go CI
 
 on:
-  push:
+  pull_request:
     paths:
       - "go-service/**"
       - ".github/workflows/go-ci.yml"
-  pull_request:
+  push:
+    branches:
+      - main
     paths:
       - "go-service/**"
       - ".github/workflows/go-ci.yml"

@@ -1,11 +1,13 @@
 name: Ruby CI
 
 on:
-  push:
+  pull_request:
     paths:
       - "ruby-service/**"
       - ".github/workflows/ruby-ci.yml"
-  pull_request:
+  push:
+    branches:
+      - main
     paths:
       - "ruby-service/**"
       - ".github/workflows/ruby-ci.yml"
