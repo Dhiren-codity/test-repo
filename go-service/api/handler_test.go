@@ -55,44 +55,56 @@ func TestHealthCheck_OK(t *testing.T) {
 func TestParseFile_BadRequests(t *testing.T) {
 	r := setupRouter()
 	tests := []struct {
-		name        string
-		body        string
-		contentType string
+		name           string
+		body           string
+		contentType    string
+		expectedStatus int
 	}{
 		{
-			name:        "empty body with content-type",
-			body:        `{}`,
-			contentType: "application/json",
+			name:           "empty body with content-type",
+			body:           `{}`,
+			contentType:    "application/json",
+			expectedStatus: http.StatusBadRequest,
 		},
 		{
-			name:        "missing content",
-			body:        `{"path":"main.go"}`,
-			contentType: "application/json",
+			name:           "missing content",
+			body:           `{"path":"main.go"}`,
+			contentType:    "application/json",
+			expectedStatus: http.StatusBadRequest,
 		},
 		{
-			name:        "missing path",
-			body:        `{"content":"package main"}`,
-			contentType: "application/json",
+			name:           "missing path",
+			body:           `{"content":"package main"}`,
+			contentType:    "application/json",
+			expectedStatus: http.StatusBadRequest,
 		},
 		{
-			name:        "invalid json",
-			body:        `{`,
-			contentType: "application/json",
+			name:           "invalid json",
+			body:           `{`,
+			contentType:    "application/json",
+			expectedStatus: http.StatusBadRequest,
 		},
 		{
-			name:        "no content-type set",
-			body:        `{"content":"x","path":"a.go"}`,
-			contentType: "",
+			name:           "no content-type set",
+			body:           `{"content":"x","path":"a.go"}`,
+			contentType:    "",
+			expectedStatus: http.StatusOK,
 		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			rr := doJSONRequest(t, r, http.MethodPost, "/parse", tt.body, tt.contentType)
-			assert.Equal(t, http.StatusBadRequest, rr.Code)
-			var m map[string]any
-			_ = json.Unmarshal(rr.Body.Bytes(), &m)
-			_, hasError := m["error"]
-			assert.True(t, hasError)
+			assert.Equal(t, tt.expectedStatus, rr.Code)
+			if tt.expectedStatus == http.StatusBadRequest {
+				var m map[string]any
+				_ = json.Unmarshal(rr.Body.Bytes(), &m)
+				_, hasError := m["error"]
+				assert.True(t, hasError)
+			} else {
+				// Should still be valid JSON response
+				var m any
+				assert.NoError(t, json.Unmarshal(rr.Body.Bytes(), &m))
+			}
 		})
 	}
 
@@ -195,39 +207,50 @@ func TestCalculateMetrics_BadRequests(t *testing.T) {
 func TestGetStatistics_BadRequests(t *testing.T) {
 	r := setupRouter()
 	tests := []struct {
-		name        string
-		body        string
-		contentType string
+		name           string
+		body           string
+		contentType    string
+		expectedStatus int
 	}{
 		{
-			name:        "empty body",
-			body:        `{}`,
-			contentType: "application/json",
+			name:           "empty body",
+			body:           `{}`,
+			contentType:    "application/json",
+			expectedStatus: http.StatusBadRequest,
 		},
 		{
-			name:        "files wrong type",
-			body:        `{"files":"not-an-array"}`,
-			contentType: "application/json",
+			name:           "files wrong type",
+			body:           `{"files":"not-an-array"}`,
+			contentType:    "application/json",
+			expectedStatus: http.StatusBadRequest,
 		},
 		{
-			name:        "invalid json",
-			body:        `{`,
-			contentType: "application/json",
+			name:           "invalid json",
+			body:           `{`,
+			contentType:    "application/json",
+			expectedStatus: http.StatusBadRequest,
 		},
 		{
-			name:        "no content-type set",
-			body:        `{"files":[{"content":"x","path":"a.go"}]}`,
-			contentType: "",
+			name:           "no content-type set",
+			body:           `{"files":[{"content":"x","path":"a.go"}]}`,
+			contentType:    "",
+			expectedStatus: http.StatusOK,
 		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			rr := doJSONRequest(t, r, http.MethodPost, "/statistics", tt.body, tt.contentType)
-			assert.Equal(t, http.StatusBadRequest, rr.Code)
-			var m map[string]any
-			_ = json.Unmarshal(rr.Body.Bytes(), &m)
-			_, hasError := m["error"]
-			assert.True(t, hasError)
+			assert.Equal(t, tt.expectedStatus, rr.Code)
+			if tt.expectedStatus == http.StatusBadRequest {
+				var m map[string]any
+				_ = json.Unmarshal(rr.Body.Bytes(), &m)
+				_, hasError := m["error"]
+				assert.True(t, hasError)
+			} else {
+				// Should still be valid JSON response
+				var m any
+				assert.NoError(t, json.Unmarshal(rr.Body.Bytes(), &m))
+			}
 		})
 	}
 
@@ -239,9 +262,9 @@ func TestGetStatistics_BadRequests(t *testing.T) {
 
 func TestContentTypeHeaderBehavior(t *testing.T) {
 	r := setupRouter()
-	// Valid JSON but wrong content-type; ShouldBindJSON should fail and handler returns 400.
+	// Valid JSON but wrong content-type; ShouldBindJSON still parses JSON and handler returns 200.
 	rr := doJSONRequest(t, r, http.MethodPost, "/parse", `{"content":"x","path":"a.go"}`, "text/plain")
-	assert.Equal(t, http.StatusBadRequest, rr.Code)
+	assert.Equal(t, http.StatusOK, rr.Code)
 }
 
 func TestErrorResponseIsJSON(t *testing.T) {

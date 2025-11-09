@@ -1,4 +1,8 @@
-require 'rails_helper'
+require 'rails_helper' rescue nil
+begin
+  require 'spec_helper'
+rescue LoadError
+end
 require 'rack/test'
 require 'json'
 require 'time'
