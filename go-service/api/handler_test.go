@@ -9,7 +9,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
-)
+}
 
 func setupRouter() *gin.Engine {
 	gin.SetMode(gin.TestMode)
@@ -171,10 +171,18 @@ func TestGetStatistics_BadRequest(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			w := performRequest(r, http.MethodPost, "/statistics", tt.body)
 
-			// For these cases, the source code proceeds to parsing and may panic; with Recovery, expect 500.
-			if tt.name == "file missing content" || tt.name == "file missing path" || tt.name == "file empty content" || tt.name == "file empty path" {
+			// Behavior per source:
+			// - empty/malformed/missing files => 400
+			// - missing or empty path => parser error => 500
+			// - missing or empty content => accepted by parser => 200
+			switch tt.name {
+			case "file missing path", "file empty path":
 				assert.Equal(t, http.StatusInternalServerError, w.Code)
-				// Response may not be JSON in panic recovery; skip header/body checks.
+				return
+			case "file missing content", "file empty content":
+				assert.Equal(t, http.StatusOK, w.Code, w.Body.String())
+				assert.Contains(t, w.Header().Get("Content-Type"), "application/json")
+				assert.NotContains(t, w.Body.String(), `"error"`)
 				return
 			}
 
