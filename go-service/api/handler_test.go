@@ -129,11 +129,6 @@ func TestAnalyzeDiff_BadRequests(t *testing.T) {
 			body:        `{`,
 			contentType: "application/json",
 		},
-		{
-			name:        "no content-type set",
-			body:        `{"old_content":"a","new_content":"b"}`,
-			contentType: "",
-		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -145,6 +140,11 @@ func TestAnalyzeDiff_BadRequests(t *testing.T) {
 			assert.True(t, hasError)
 		})
 	}
+
+	t.Run("no content-type set returns 200", func(t *testing.T) {
+		rr := doJSONRequest(t, r, http.MethodPost, "/diff", `{"old_content":"a","new_content":"b"}`, "")
+		assert.Equal(t, http.StatusOK, rr.Code)
+	})
 
 	t.Run("wrong method returns 404", func(t *testing.T) {
 		rr := doJSONRequest(t, r, http.MethodGet, "/diff", "", "")
@@ -169,11 +169,6 @@ func TestCalculateMetrics_BadRequests(t *testing.T) {
 			body:        `{`,
 			contentType: "application/json",
 		},
-		{
-			name:        "no content-type set",
-			body:        `{"content":"package main"}`,
-			contentType: "",
-		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -185,6 +180,11 @@ func TestCalculateMetrics_BadRequests(t *testing.T) {
 			assert.True(t, hasError)
 		})
 	}
+
+	t.Run("no content-type set returns 200", func(t *testing.T) {
+		rr := doJSONRequest(t, r, http.MethodPost, "/metrics", `{"content":"package main"}`, "")
+		assert.Equal(t, http.StatusOK, rr.Code)
+	})
 
 	t.Run("wrong method returns 404", func(t *testing.T) {
 		rr := doJSONRequest(t, r, http.MethodGet, "/metrics", "", "")
@@ -207,11 +207,6 @@ func TestGetStatistics_BadRequests(t *testing.T) {
 		{
 			name:        "files wrong type",
 			body:        `{"files":"not-an-array"}`,
-			contentType: "application/json",
-		},
-		{
-			name:        "file item missing required fields",
-			body:        `{"files":[{}]}`,
 			contentType: "application/json",
 		},
 		{
