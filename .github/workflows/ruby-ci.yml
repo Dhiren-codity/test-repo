@@ -24,12 +24,21 @@ jobs:
         uses: ruby/setup-ruby@v1
         with:
           ruby-version: ${{ matrix.ruby-version }}
-          bundler-cache: true
+          bundler-cache: ${{ matrix.ruby-version != '3.1' }}
           working-directory: ./ruby-service
+
+      - name: Install Bundler for Ruby 3.1
+        if: matrix.ruby-version == '3.1'
+        run: gem install bundler -v 2.5.0
 
       - name: Install dependencies
         working-directory: ./ruby-service
-        run: bundle install
+        run: |
+          if [ "${{ matrix.ruby-version }}" == "3.1" ]; then
+            bundle _2.5.0_ install
+          else
+            bundle install
+          fi
 
       - name: Lint with RuboCop
         working-directory: ./ruby-service
