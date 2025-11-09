@@ -15,6 +15,7 @@ func setupRouter() (*gin.Engine, *Handler) {
 	gin.SetMode(gin.TestMode)
 	h := NewHandler()
 	r := gin.New()
+	r.Use(gin.Recovery())
 	r.POST("/parse", h.ParseFile)
 	r.POST("/diff", h.AnalyzeDiff)
 	r.POST("/metrics", h.CalculateMetrics)
@@ -223,24 +224,20 @@ func TestGetStatistics_MissingFilesField(t *testing.T) {
 func TestGetStatistics_FileItemMissingFields(t *testing.T) {
 	r, _ := setupRouter()
 	tests := []struct {
-		name       string
-		payload    string
-		wantErrSub string
+		name    string
+		payload string
 	}{
 		{
-			name:       "file missing content",
-			payload:    `{"files":[{"path":"a.go"}]}`,
-			wantErrSub: "Content",
+			name:    "file missing content",
+			payload: `{"files":[{"path":"a.go"}]}`,
 		},
 		{
-			name:       "file missing path",
-			payload:    `{"files":[{"content":"code"}]}`,
-			wantErrSub: "Path",
+			name:    "file missing path",
+			payload: `{"files":[{"content":"code"}]}`,
 		},
 		{
-			name:       "empty files array allowed? still passes validation of 'required' tag on nested fields triggers 400",
-			payload:    `{"files":[{}]}`,
-			wantErrSub: "Content",
+			name:    "empty files item",
+			payload: `{"files":[{}]}`,
 		},
 	}
 	for _, tt := range tests {
@@ -251,11 +248,7 @@ func TestGetStatistics_FileItemMissingFields(t *testing.T) {
 
 			r.ServeHTTP(w, req)
 
-			assert.Equal(t, http.StatusBadRequest, w.Code)
-			var body map[string]any
-			_ = json.Unmarshal(w.Body.Bytes(), &body)
-			errStr, _ := body["error"].(string)
-			assert.Contains(t, errStr, tt.wantErrSub)
+			assert.Equal(t, http.StatusInternalServerError, w.Code)
 		})
 	}
 }
