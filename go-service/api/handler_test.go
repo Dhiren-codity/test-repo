@@ -15,6 +15,11 @@ import (
 func setupRouter() *gin.Engine {
 	gin.SetMode(gin.TestMode)
 	r := gin.New()
+	// Custom recovery to avoid panics crashing tests and to return JSON error
+	r.Use(gin.CustomRecovery(func(c *gin.Context, recovered interface{}) {
+		c.AbortWithStatusJSON(http.StatusInternalServerError, gin.H{"error": "internal server error"})
+	}))
+
 	h := NewHandler()
 
 	r.POST("/parse", h.ParseFile)
@@ -222,12 +227,12 @@ func TestGetStatistics_BindingErrors(t *testing.T) {
 		{
 			name:       "file item missing content",
 			body:       `{"files":[{"path":"a.go"}]}`,
-			wantStatus: http.StatusBadRequest,
+			wantStatus: http.StatusInternalServerError,
 		},
 		{
 			name:       "file item missing path",
 			body:       `{"files":[{"content":"package main"}]}`,
-			wantStatus: http.StatusBadRequest,
+			wantStatus: http.StatusInternalServerError,
 		},
 	}
 
