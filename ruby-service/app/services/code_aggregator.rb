@@ -97,4 +97,3 @@ class CodeAggregator
     }[ext] || 'unknown'
   end
 end
-
