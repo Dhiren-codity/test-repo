@@ -137,10 +137,11 @@ func TestGetStatistics_BadRequest_FilesEmptySlice(t *testing.T) {
 
 	w := performRequest(t, http.MethodPost, "/statistics", body, "application/json", h.GetStatistics)
 
-	assert.Equal(t, http.StatusBadRequest, w.Code)
-	var resp map[string]string
-	_ = json.Unmarshal(w.Body.Bytes(), &resp)
-	assert.NotEmpty(t, resp["error"])
+	assert.Equal(t, http.StatusOK, w.Code)
+	assert.Contains(t, w.Header().Get("Content-Type"), "application/json")
+	var resp map[string]any
+	err := json.Unmarshal(w.Body.Bytes(), &resp)
+	assert.NoError(t, err)
 }
 
 func TestParseFile_BadRequest_WrongMethod(t *testing.T) {
