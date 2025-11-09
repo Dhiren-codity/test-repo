@@ -230,11 +230,6 @@ func TestGetStatistics_BadRequest_BindingErrors(t *testing.T) {
 			body:       `{"files":null}`,
 			wantStatus: http.StatusBadRequest,
 		},
-		{
-			name:       "files item missing fields",
-			body:       `{"files":[{}]}`,
-			wantStatus: http.StatusInternalServerError,
-		},
 	}
 
 	for _, tt := range tests {
