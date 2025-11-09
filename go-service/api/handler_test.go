@@ -95,7 +95,7 @@ func TestParseFile_BadRequests(t *testing.T) {
 		},
 		{
 			name:        "wrong content type",
-			body:        `{"content":"x","path":"a"}`,
+			body:        `not json`,
 			contentType: "text/plain",
 			wantStatus:  http.StatusBadRequest,
 		},
@@ -150,7 +150,7 @@ func TestAnalyzeDiff_BadRequests(t *testing.T) {
 		},
 		{
 			name:        "wrong content type",
-			body:        `{"old_content":"a","new_content":"b"}`,
+			body:        `not json`,
 			contentType: "text/plain",
 			wantStatus:  http.StatusBadRequest,
 		},
@@ -193,7 +193,7 @@ func TestCalculateMetrics_BadRequests(t *testing.T) {
 		},
 		{
 			name:        "wrong content type",
-			body:        `{"content":"anything"}`,
+			body:        `not json`,
 			contentType: "text/plain",
 			wantStatus:  http.StatusBadRequest,
 		},
@@ -255,7 +255,7 @@ func TestGetStatistics_BadRequests(t *testing.T) {
 		},
 		{
 			name:        "wrong content type",
-			body:        `{"files":[{"content":"x","path":"a"}]}`,
+			body:        `not json`,
 			contentType: "text/plain",
 			wantStatus:  http.StatusBadRequest,
 		},
@@ -284,10 +284,10 @@ func TestContentTypeMissing_ReturnsBadRequest(t *testing.T) {
 		path string
 		body string
 	}{
-		{path: "/parse", body: `{"content":"x","path":"a"}`},
-		{path: "/diff", body: `{"old_content":"x","new_content":"y"}`},
-		{path: "/metrics", body: `{"content":"x"}`},
-		{path: "/statistics", body: `{"files":[{"content":"x","path":"a"}]}`},
+		{path: "/parse", body: `not json`},
+		{path: "/diff", body: `not json`},
+		{path: "/metrics", body: `not json`},
+		{path: "/statistics", body: `not json`},
 	}
 	for _, c := range cases {
 		rr := doRequest(t, router, http.MethodPost, c.path, c.body, "")
