@@ -41,8 +41,8 @@ func TestIsValidCorrelationID(t *testing.T) {
 			got := ExtractOrGenerateID(req)
 			if tt.want {
 				assert.Equal(t, tt.id, got)
-				assert.GreaterOrEqual(t, len(got), 10)
-				assert.LessOrEqual(t, len(got), 100)
+				assert.True(t, len(got) >= 10)
+				assert.True(t, len(got) <= 100)
 			} else {
 				assert.NotEqual(t, tt.id, got)
 				assert.NotEmpty(t, got)
@@ -76,8 +76,8 @@ func TestExtractOrGenerateCorrelationID(t *testing.T) {
 	req1 := httptest.NewRequest(http.MethodGet, "/", nil)
 	id1 := ExtractOrGenerateID(req1)
 	require.NotEmpty(t, id1)
-	assert.GreaterOrEqual(t, len(id1), 10)
-	assert.LessOrEqual(t, len(id1), 100)
+	assert.True(t, len(id1) >= 10)
+	assert.True(t, len(id1) <= 100)
 
 	// Valid header -> use existing
 	req2 := httptest.NewRequest(http.MethodGet, "/", nil)
@@ -91,8 +91,8 @@ func TestExtractOrGenerateCorrelationID(t *testing.T) {
 	id3 := ExtractOrGenerateID(req3)
 	require.NotEmpty(t, id3)
 	assert.NotEqual(t, "bad!!", id3)
-	assert.GreaterOrEqual(t, len(id3), 10)
-	assert.LessOrEqual(t, len(id3), 100)
+	assert.True(t, len(id3) >= 10)
+	assert.True(t, len(id3) <= 100)
 }
 
 func TestExtractOrGenerateID_Exported(t *testing.T) {
@@ -101,8 +101,8 @@ func TestExtractOrGenerateID_Exported(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
 	id := ExtractOrGenerateID(req)
 	require.NotEmpty(t, id)
-	assert.GreaterOrEqual(t, len(id), 10)
-	assert.LessOrEqual(t, len(id), 100)
+	assert.True(t, len(id) >= 10)
+	assert.True(t, len(id) <= 100)
 
 	req.Header.Set(CorrelationIDHeader, strings.Repeat("b", 10))
 	id2 := ExtractOrGenerateID(req)
@@ -142,7 +142,7 @@ func TestCorrelationIDMiddleware_SetsHeaderAndTracks_Default200_Context(t *testi
 	assert.Equal(t, "/ping", td.Path)
 	assert.Equal(t, cid, td.CorrelationID)
 	assert.Equal(t, http.StatusOK, td.Status)
-	assert.GreaterOrEqual(t, td.DurationMS, 0.0)
+	assert.True(t, td.DurationMS >= 0.0)
 }
 
 func TestCorrelationIDMiddleware_RespectsClientHeader_AndCapturesLastStatus(t *testing.T) {
@@ -224,7 +224,7 @@ func TestGetTracesAndAllTraces_CopyBehavior(t *testing.T) {
 
 	// GetAllTraces returns deep-copied map and slices
 	all := GetAllTraces()
-	require.GreaterOrEqual(t, len(all), 2)
+	require.True(t, len(all) >= 2)
 
 	// Mutate returned map and slice
 	delete(all, id1)
