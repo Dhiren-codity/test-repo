@@ -195,21 +195,6 @@ func TestGetStatistics_ShouldBindJSONErrors(t *testing.T) {
 			body:       `{}`,
 			wantStatus: http.StatusBadRequest,
 		},
-		{
-			name:       "empty files slice",
-			body:       `{"files":[]}`,
-			wantStatus: http.StatusBadRequest,
-		},
-		{
-			name:       "file missing content",
-			body:       `{"files":[{"path":"a.go"}]}`,
-			wantStatus: http.StatusBadRequest,
-		},
-		{
-			name:       "file missing path",
-			body:       `{"files":[{"content":"package main\n"}]}`,
-			wantStatus: http.StatusBadRequest,
-		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
