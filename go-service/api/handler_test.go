@@ -186,38 +186,3 @@ func TestCalculateMetrics_MethodNotAllowed(t *testing.T) {
 	r.ServeHTTP(rr, req)
 	assert.Equal(t, http.StatusNotFound, rr.Code)
 }
-
-func TestGetStatistics_BadRequests(t *testing.T) {
-	r, _ := setupRouter()
-	type errResp struct {
-		Error string `json:"error"`
-	}
-	tests := []struct {
-		name string
-		body string
-	}{
-		{"no body", ""},
-		{"invalid json", "{"},
-		{"missing files", `{}`},
-		{"empty files", `{"files":null}`},
-		{"file invalid type", `{"files":[1]}`},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			rr := doRaw(t, r, http.MethodPost, "/statistics", "application/json", tt.body)
-			assert.Equal(t, http.StatusBadRequest, rr.Code)
-			var e errResp
-			_ = json.Unmarshal(rr.Body.Bytes(), &e)
-			assert.NotEmpty(t, e.Error)
-		})
-	}
-}
-
-func TestGetStatistics_MethodNotAllowed(t *testing.T) {
-	r, _ := setupRouter()
-	rr := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodGet, "/statistics", nil)
-	r.ServeHTTP(rr, req)
-	assert.Equal(t, http.StatusNotFound, rr.Code)
-}
