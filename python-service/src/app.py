@@ -3,14 +3,28 @@ import os
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from flask import Flask, request, jsonify  # noqa: E402
+from flask import Flask, request, jsonify, g  # noqa: E402
 from flask_cors import CORS  # noqa: E402
 from src.code_reviewer import CodeReviewer  # noqa: E402
+from src.statistics import StatisticsAggregator  # noqa: E402
+from src.test_coverage_analyzer import TestCoverageAnalyzer  # noqa: E402
+from src.correlation_middleware import CorrelationIDMiddleware, get_traces, get_all_traces  # noqa: E402
+from src.request_validator import (  # noqa: E402
+    validate_review_request,
+    validate_statistics_request,
+    sanitize_request_data,
+    get_validation_errors,
+    clear_validation_errors
+)
 
 app = Flask(__name__)
 CORS(app)
 
+correlation_middleware = CorrelationIDMiddleware(app)
+
 reviewer = CodeReviewer()
+statistics_aggregator = StatisticsAggregator()
+coverage_analyzer = TestCoverageAnalyzer()
 
 
 @app.route("/health", methods=["GET"])
@@ -22,13 +36,23 @@ def health_check():
 def review_code():
     data = request.get_json()
 
-    if not data or "content" not in data:
-        return jsonify({"error": "Missing 'content' field"}), 400
+    if not data:
+        return jsonify({"error": "Missing request body"}), 400
 
-    content = data.get("content", "")
-    language = data.get("language", "python")
+    validation_errors = validate_review_request(data)
+    if validation_errors:
+        return jsonify({
+            "error": "Validation failed",
+            "details": [error.to_dict() for error in validation_errors]
+        }), 422
+
+    sanitized_data = sanitize_request_data(data)
+    content = sanitized_data.get("content", "")
+    language = sanitized_data.get("language", "python")
 
     result = reviewer.review_code(content, language)
+
+    correlation_id = getattr(g, 'correlation_id', None)
 
     return jsonify(
         {
@@ -44,6 +68,7 @@ def review_code():
             ],
             "suggestions": result.suggestions,
             "complexity_score": result.complexity_score,
+            "correlation_id": correlation_id
         }
     )
 
@@ -59,6 +84,247 @@ def review_function():
     result = reviewer.review_function(function_code)
 
     return jsonify(result)
+
+
+@app.route("/statistics", methods=["POST"])
+def get_statistics():
+    data = request.get_json()
+
+    if not data:
+        return jsonify({"error": "Missing request body"}), 400
+
+    validation_errors = validate_statistics_request(data)
+    if validation_errors:
+        return jsonify({
+            "error": "Validation failed",
+            "details": [error.to_dict() for error in validation_errors]
+        }), 422
+
+    sanitized_data = sanitize_request_data(data)
+    files = sanitized_data.get("files", [])
+    stats = statistics_aggregator.aggregate_reviews(files)
+
+    correlation_id = getattr(g, 'correlation_id', None)
+
+    return jsonify(
+        {
+            "total_files": stats.total_files,
+            "average_score": stats.average_score,
+            "total_issues": stats.total_issues,
+            "issues_by_severity": stats.issues_by_severity,
+            "average_complexity": stats.average_complexity,
+            "files_with_high_complexity": stats.files_with_high_complexity,
+            "total_suggestions": stats.total_suggestions,
+            "correlation_id": correlation_id
+        }
+    )
+
+
+@app.route("/traces", methods=["GET"])
+def list_traces():
+    all_traces = get_all_traces()
+    return jsonify({
+        "total_traces": len(all_traces),
+        "traces": all_traces
+    })
+
+
+@app.route("/traces/<correlation_id>", methods=["GET"])
+def get_trace(correlation_id):
+    traces = get_traces(correlation_id)
+
+    if not traces:
+        return jsonify({"error": "No traces found for correlation ID"}), 404
+
+    return jsonify({
+        "correlation_id": correlation_id,
+        "trace_count": len(traces),
+        "traces": traces
+    })
+
+
+@app.route("/validation/errors", methods=["GET"])
+def list_validation_errors():
+    errors = get_validation_errors()
+    return jsonify({
+        "total_errors": len(errors),
+        "errors": errors
+    })
+
+
+@app.route("/validation/errors", methods=["DELETE"])
+def delete_validation_errors():
+    clear_validation_errors()
+    return jsonify({"message": "Validation errors cleared"})
+
+
+@app.route("/coverage/analyze", methods=["POST"])
+def analyze_coverage():
+    data = request.get_json()
+
+    if not data:
+        return jsonify({"error": "Missing request body"}), 400
+
+    source_code = data.get("source_code", "")
+    test_code = data.get("test_code")
+    executed_lines = set(data.get("executed_lines", []))
+    executed_functions = set(data.get("executed_functions", []))
+    executed_classes = set(data.get("executed_classes", []))
+
+    if not source_code:
+        return jsonify({"error": "Missing 'source_code' field"}), 400
+
+    try:
+        report = coverage_analyzer.analyze_coverage(
+            source_code=source_code,
+            test_code=test_code,
+            executed_lines=executed_lines,
+            executed_functions=executed_functions,
+            executed_classes=executed_classes
+        )
+
+        summary = coverage_analyzer.generate_coverage_report_summary(report)
+
+        correlation_id = getattr(g, 'correlation_id', None)
+
+        return jsonify({
+            "coverage_report": {
+                "summary": summary["summary"],
+                "metrics": summary["metrics"],
+                "branch_coverage": summary["branch_coverage"],
+                "uncovered_items": [
+                    {
+                        "name": item.name,
+                        "type": item.type.value,
+                        "line_start": item.line_start,
+                        "line_end": item.line_end,
+                        "complexity": item.complexity,
+                        "test_count": item.test_count
+                    }
+                    for item in report.uncovered_items[:20]
+                ],
+                "high_complexity_items": [
+                    {
+                        "name": item.name,
+                        "type": item.type.value,
+                        "line_start": item.line_start,
+                        "line_end": item.line_end,
+                        "complexity": item.complexity
+                    }
+                    for item in report.high_complexity_items[:10]
+                ],
+                "suggestions": summary["suggestions"],
+                "function_coverage_map": report.function_coverage_map
+            },
+            "correlation_id": correlation_id
+        })
+    except SyntaxError as e:
+        return jsonify({
+            "error": "Invalid Python syntax in source code",
+            "details": str(e)
+        }), 400
+    except Exception as e:
+        return jsonify({
+            "error": "Failed to analyze coverage",
+            "details": str(e)
+        }), 500
+
+
+@app.route("/coverage/report", methods=["POST"])
+def generate_coverage_report():
+    data = request.get_json()
+
+    if not data:
+        return jsonify({"error": "Missing request body"}), 400
+
+    source_code = data.get("source_code", "")
+    test_code = data.get("test_code")
+    executed_lines = set(data.get("executed_lines", []))
+    executed_functions = set(data.get("executed_functions", []))
+    executed_classes = set(data.get("executed_classes", []))
+
+    if not source_code:
+        return jsonify({"error": "Missing 'source_code' field"}), 400
+
+    try:
+        report = coverage_analyzer.analyze_coverage(
+            source_code=source_code,
+            test_code=test_code,
+            executed_lines=executed_lines,
+            executed_functions=executed_functions,
+            executed_classes=executed_classes
+        )
+
+        correlation_id = getattr(g, 'correlation_id', None)
+
+        return jsonify({
+            "detailed_report": {
+                "overall_coverage_percentage": round(report.coverage_percentage, 2),
+                "function_coverage": {
+                    "total": report.total_functions,
+                    "covered": report.covered_functions,
+                    "percentage": round(
+                        (report.covered_functions / max(1, report.total_functions)) * 100, 2
+                    ) if report.total_functions > 0 else 0.0
+                },
+                "class_coverage": {
+                    "total": report.total_classes,
+                    "covered": report.covered_classes,
+                    "percentage": round(
+                        (report.covered_classes / max(1, report.total_classes)) * 100, 2
+                    ) if report.total_classes > 0 else 0.0
+                },
+                "method_coverage": {
+                    "total": report.total_methods,
+                    "covered": report.covered_methods,
+                    "percentage": round(
+                        (report.covered_methods / max(1, report.total_methods)) * 100, 2
+                    ) if report.total_methods > 0 else 0.0
+                },
+                "line_coverage": {
+                    "total": report.total_lines,
+                    "covered": report.covered_lines,
+                    "percentage": round(
+                        (report.covered_lines / max(1, report.total_lines)) * 100, 2
+                    ) if report.total_lines > 0 else 0.0
+                },
+                "branch_coverage": report.branch_coverage,
+                "all_uncovered_items": [
+                    {
+                        "name": item.name,
+                        "type": item.type.value,
+                        "line_start": item.line_start,
+                        "line_end": item.line_end,
+                        "complexity": item.complexity,
+                        "test_count": item.test_count
+                    }
+                    for item in report.uncovered_items
+                ],
+                "all_high_complexity_items": [
+                    {
+                        "name": item.name,
+                        "type": item.type.value,
+                        "line_start": item.line_start,
+                        "line_end": item.line_end,
+                        "complexity": item.complexity
+                    }
+                    for item in report.high_complexity_items
+                ],
+                "suggestions": report.suggestions,
+                "function_coverage_map": report.function_coverage_map
+            },
+            "correlation_id": correlation_id
+        })
+    except SyntaxError as e:
+        return jsonify({
+            "error": "Invalid Python syntax in source code",
+            "details": str(e)
+        }), 400
+    except Exception as e:
+        return jsonify({
+            "error": "Failed to generate coverage report",
+            "details": str(e)
+        }), 500
 
 
 if __name__ == "__main__":

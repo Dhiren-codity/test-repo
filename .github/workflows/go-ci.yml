@@ -1,16 +1,47 @@
 name: Go CI
 
 on:
-  push:
+  pull_request:
     paths:
       - "go-service/**"
       - ".github/workflows/go-ci.yml"
-  pull_request:
+  push:
+    branches:
+      - main
     paths:
       - "go-service/**"
       - ".github/workflows/go-ci.yml"
 
 jobs:
+  lint:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.21"
+
+      - name: Cache Go modules
+        uses: actions/cache@v3
+        with:
+          path: ~/go/pkg/mod
+          key: ${{ runner.os }}-go-${{ hashFiles('go-service/go.sum') }}
+          restore-keys: |
+            ${{ runner.os }}-go-
+
+      - name: Download dependencies
+        working-directory: ./go-service
+        run: go mod download
+
+      - name: Lint
+        uses: golangci/golangci-lint-action@v3
+        with:
+          version: latest
+          working-directory: ./go-service
+
   test:
     runs-on: ubuntu-latest
 
@@ -50,9 +81,3 @@ jobs:
       - name: Build
         working-directory: ./go-service
         run: go build -v -o /tmp/go-service-test ./cmd/main.go
-
-      - name: Lint
-        uses: golangci/golangci-lint-action@v3
-        with:
-          version: latest
-          working-directory: ./go-service

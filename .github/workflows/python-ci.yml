@@ -1,17 +1,19 @@
 name: Python CI
 
 on:
-  push:
+  pull_request:
     paths:
       - "python-service/**"
       - ".github/workflows/python-ci.yml"
-  pull_request:
+  push:
+    branches:
+      - main
     paths:
       - "python-service/**"
       - ".github/workflows/python-ci.yml"
 
 jobs:
-  test:
+  lint:
     runs-on: ubuntu-latest
     strategy:
       matrix:
@@ -59,6 +61,34 @@ jobs:
           PYTHONPATH: ${{ github.workspace }}/python-service
         run: |
           mypy src --ignore-missing-imports || true
+
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ["3.10", "3.11", "3.12"]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Cache pip packages
+        uses: actions/cache@v3
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-${{ hashFiles('python-service/requirements.txt') }}
+          restore-keys: |
+            ${{ runner.os }}-pip-
+
+      - name: Install dependencies
+        working-directory: ./python-service
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
 
       - name: Run tests
         working-directory: ./python-service

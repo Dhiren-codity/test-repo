@@ -31,6 +31,13 @@ type MetricsRequest struct {
 	Content string `json:"content" binding:"required"`
 }
 
+type StatisticsRequest struct {
+	Files []struct {
+		Content string `json:"content" binding:"required"`
+		Path    string `json:"path" binding:"required"`
+	} `json:"files" binding:"required"`
+}
+
 func (h *Handler) ParseFile(c *gin.Context) {
 	var req ParseRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -72,6 +79,28 @@ func (h *Handler) CalculateMetrics(c *gin.Context) {
 
 	metrics := h.parser.CalculateMetrics(req.Content)
 	c.JSON(http.StatusOK, metrics)
+}
+
+func (h *Handler) GetStatistics(c *gin.Context) {
+	var req StatisticsRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	files := make([]*parser.CodeFile, 0, len(req.Files))
+	for _, fileReq := range req.Files {
+		file, err := h.parser.ParseFile(fileReq.Content, fileReq.Path)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			return
+		}
+		files = append(files, file)
+	}
+
+	calc := parser.NewStatisticsCalculator()
+	stats := calc.CalculateFileStats(files)
+	c.JSON(http.StatusOK, stats)
 }
 
 func (h *Handler) HealthCheck(c *gin.Context) {
