@@ -321,7 +321,7 @@ func TestLogValidationErrors_TrimsTo100(t *testing.T) {
 	var errs []ValidationError
 	for i := 0; i < 150; i++ {
 		errs = append(errs, ValidationError{
-			Field:  "e#" + strconvI(i),
+			Field:  "e#" + helperItoa(i),
 			Reason: "test",
 		})
 	}
@@ -349,7 +349,7 @@ func TestContainsNullBytes(t *testing.T) {
 }
 
 // Helper to avoid importing strconv for a small conversion
-func strconvI(i int) string {
+func helperItoa(i int) string {
 	var buf [20]byte
 	b := buf[:0]
 	if i == 0 {
