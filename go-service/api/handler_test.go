@@ -200,7 +200,7 @@ func TestGetStatistics_BadRequests(t *testing.T) {
 		{"invalid json", "{"},
 		{"missing files", `{}`},
 		{"empty files", `{"files":null}`},
-		{"file missing content", `{"files":[null]}`},
+		{"file missing content", `{"files":[{"path":"a.txt"}]}`},
 		{"file missing path", `{"files":[1]}`},
 		{"file empty content", `{"files":[{"content":"","path":"a.txt"}]}`},
 		{"file empty path", `{"files":[{"content":"x","path":""}]}`},
