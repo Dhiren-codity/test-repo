@@ -3,13 +3,23 @@ import os
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from flask import Flask, request, jsonify  # noqa: E402
+from flask import Flask, request, jsonify, g  # noqa: E402
 from flask_cors import CORS  # noqa: E402
 from src.code_reviewer import CodeReviewer  # noqa: E402
 from src.statistics import StatisticsAggregator  # noqa: E402
+from src.correlation_middleware import CorrelationIDMiddleware, get_traces, get_all_traces  # noqa: E402
+from src.request_validator import (  # noqa: E402
+    validate_review_request,
+    validate_statistics_request,
+    sanitize_request_data,
+    get_validation_errors,
+    clear_validation_errors
+)
 
 app = Flask(__name__)
 CORS(app)
+
+correlation_middleware = CorrelationIDMiddleware(app)
 
 reviewer = CodeReviewer()
 statistics_aggregator = StatisticsAggregator()
@@ -24,13 +34,23 @@ def health_check():
 def review_code():
     data = request.get_json()
 
-    if not data or "content" not in data:
-        return jsonify({"error": "Missing 'content' field"}), 400
+    if not data:
+        return jsonify({"error": "Missing request body"}), 400
 
-    content = data.get("content", "")
-    language = data.get("language", "python")
+    validation_errors = validate_review_request(data)
+    if validation_errors:
+        return jsonify({
+            "error": "Validation failed",
+            "details": [error.to_dict() for error in validation_errors]
+        }), 422
+
+    sanitized_data = sanitize_request_data(data)
+    content = sanitized_data.get("content", "")
+    language = sanitized_data.get("language", "python")
 
     result = reviewer.review_code(content, language)
+
+    correlation_id = getattr(g, 'correlation_id', None)
 
     return jsonify(
         {
@@ -46,6 +66,7 @@ def review_code():
             ],
             "suggestions": result.suggestions,
             "complexity_score": result.complexity_score,
+            "correlation_id": correlation_id
         }
     )
 
@@ -67,11 +88,21 @@ def review_function():
 def get_statistics():
     data = request.get_json()
 
-    if not data or "files" not in data:
-        return jsonify({"error": "Missing 'files' field"}), 400
+    if not data:
+        return jsonify({"error": "Missing request body"}), 400
 
-    files = data.get("files", [])
+    validation_errors = validate_statistics_request(data)
+    if validation_errors:
+        return jsonify({
+            "error": "Validation failed",
+            "details": [error.to_dict() for error in validation_errors]
+        }), 422
+
+    sanitized_data = sanitize_request_data(data)
+    files = sanitized_data.get("files", [])
     stats = statistics_aggregator.aggregate_reviews(files)
+
+    correlation_id = getattr(g, 'correlation_id', None)
 
     return jsonify(
         {
@@ -82,8 +113,47 @@ def get_statistics():
             "average_complexity": stats.average_complexity,
             "files_with_high_complexity": stats.files_with_high_complexity,
             "total_suggestions": stats.total_suggestions,
+            "correlation_id": correlation_id
         }
     )
+
+
+@app.route("/traces", methods=["GET"])
+def list_traces():
+    all_traces = get_all_traces()
+    return jsonify({
+        "total_traces": len(all_traces),
+        "traces": all_traces
+    })
+
+
+@app.route("/traces/<correlation_id>", methods=["GET"])
+def get_trace(correlation_id):
+    traces = get_traces(correlation_id)
+
+    if not traces:
+        return jsonify({"error": "No traces found for correlation ID"}), 404
+
+    return jsonify({
+        "correlation_id": correlation_id,
+        "trace_count": len(traces),
+        "traces": traces
+    })
+
+
+@app.route("/validation/errors", methods=["GET"])
+def list_validation_errors():
+    errors = get_validation_errors()
+    return jsonify({
+        "total_errors": len(errors),
+        "errors": errors
+    })
+
+
+@app.route("/validation/errors", methods=["DELETE"])
+def delete_validation_errors():
+    clear_validation_errors()
+    return jsonify({"message": "Validation errors cleared"})
 
 
 if __name__ == "__main__":
