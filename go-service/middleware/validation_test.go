@@ -122,10 +122,10 @@ func TestSanitizeInput(t *testing.T) {
 
 func TestSanitizeRequestBody_JSON(t *testing.T) {
 	body := `{
-		"content": "a\x00b\x01c",
+		"content": "a\u0000b\u0001c",
 		"path": "x\u007fy",
-		"old_content": "\x00",
-		"new_content": "line1\x01\nline2"
+		"old_content": "\u0000",
+		"new_content": "line1\u0001\nline2"
 	}`
 	req := httptest.NewRequest(http.MethodPost, "/", bytes.NewBufferString(body))
 
@@ -162,7 +162,7 @@ func TestValidationMiddleware_SanitizesPostBody(t *testing.T) {
 	})
 	mw := ValidationMiddleware(next)
 
-	reqBody := `{"content":"z\x00y\x01x","path":"a\u007fb","old_content":"\x00","new_content":"keep\nline\tand\rcarriage"}`
+	reqBody := `{"content":"z\u0000y\u0001x","path":"a\u007fb","old_content":"\u0000","new_content":"keep\nline\tand\rcarriage"}`
 	req := httptest.NewRequest(http.MethodPost, "/", bytes.NewBufferString(reqBody))
 	rr := httptest.NewRecorder()
 
@@ -185,7 +185,7 @@ func TestValidationMiddleware_NonPost_PassThrough(t *testing.T) {
 	})
 	mw := ValidationMiddleware(next)
 
-	orig := `{"content":"a\x00b"}`
+	orig := `{"content":"a\u0000b"}`
 	req := httptest.NewRequest(http.MethodGet, "/", bytes.NewBufferString(orig))
 	rr := httptest.NewRecorder()
 
