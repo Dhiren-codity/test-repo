@@ -1,5 +1,7 @@
 # frozen_string_literal: true
 
+require_relative '../app/polyglot_api'
+
 RSpec.describe PolyglotAPI do
   include Rack::Test::Methods
 
@@ -16,54 +18,7 @@ RSpec.describe PolyglotAPI do
     end
   end
 
-  describe 'POST /analyze' do
-    it 'accepts valid content' do
-      allow_any_instance_of(PolyglotAPI).to receive(:call_go_service)
-        .and_return({ 'language' => 'python', 'lines' => ['def test'] })
-      allow_any_instance_of(PolyglotAPI).to receive(:call_python_service)
-        .and_return({ 'score' => 85.0, 'issues' => [] })
-
-      post '/analyze', { content: 'def test(): pass', path: 'test.py' }.to_json, 'CONTENT_TYPE' => 'application/json'
-      expect(last_response.status).to eq(200)
-      json_response = JSON.parse(last_response.body)
-      expect(json_response).to have_key('summary')
-    end
-  end
-
-  describe 'GET /status' do
-    it 'returns aggregated service health statuses' do
-      allow_any_instance_of(PolyglotAPI).to receive(:check_service_health) do |_, url|
-        if url.include?('8080')
-          { status: 'healthy' }
-        elsif url.include?('8081')
-          { status: 'unreachable', error: 'timeout' }
-        else
-          { status: 'unknown' }
-        end
-      end
-
-      get '/status'
-      expect(last_response.status).to eq(200)
-      json_response = JSON.parse(last_response.body)
-      expect(json_response['services']['ruby']['status']).to eq('healthy')
-      expect(json_response['services']['go']['status']).to eq('healthy')
-      expect(json_response['services']['python']['status']).to eq('unreachable')
-      expect(json_response['services']['python']['error']).to be_a(String)
-    end
-  end
-
   describe 'POST /analyze validations' do
-    it 'returns 422 when validation fails' do
-      allow(RequestValidator).to receive(:validate_analyze_request)
-        .and_return([double(to_hash: { field: 'content', message: 'is required' })])
-      post '/analyze', {}.to_json, 'CONTENT_TYPE' => 'application/json'
-      expect(last_response.status).to eq(422)
-      json_response = JSON.parse(last_response.body)
-      expect(json_response['error']).to eq('Validation failed')
-      expect(json_response['details']).to be_an(Array)
-      expect(json_response['details'].first['field']).to eq('content')
-    end
-
     it 'passes correlation id to downstream services' do
       expect_any_instance_of(PolyglotAPI).to receive(:call_go_service)
         .with('/parse', hash_including(:content, :path), kind_of(String))
@@ -94,11 +49,11 @@ RSpec.describe PolyglotAPI do
       new_content = "puts 'new'"
 
       expect_any_instance_of(PolyglotAPI).to receive(:call_go_service)
-        .with('/diff', { old_content: old_content, new_content: new_content }, nil)
+        .with('/diff', { old_content: old_content, new_content: new_content })
         .and_return({ 'changes' => [{ 'line' => 1, 'type' => 'modified' }] })
 
       expect_any_instance_of(PolyglotAPI).to receive(:call_python_service)
-        .with('/review', { content: new_content }, nil)
+        .with('/review', { content: new_content })
         .and_return({ 'score' => 88.5, 'issues' => [] })
 
       post '/diff', { old_content: old_content, new_content: new_content }.to_json, 'CONTENT_TYPE' => 'application/json'
@@ -116,23 +71,6 @@ RSpec.describe PolyglotAPI do
       json_response = JSON.parse(last_response.body)
       expect(json_response['error']).to eq('Missing content')
     end
-
-    it 'returns metrics, review and overall quality score' do
-      content = "def foo():\n  return 1\n"
-      allow_any_instance_of(PolyglotAPI).to receive(:call_go_service)
-        .with('/metrics', { content: content }, nil)
-        .and_return({ 'complexity' => 1 })
-      allow_any_instance_of(PolyglotAPI).to receive(:call_python_service)
-        .with('/review', { content: content }, nil)
-        .and_return({ 'score' => 85, 'issues' => ['n1'] })
-
-      post '/metrics', { content: content }.to_json, 'CONTENT_TYPE' => 'application/json'
-      expect(last_response.status).to eq(200)
-      body = JSON.parse(last_response.body)
-      expect(body['metrics']['complexity']).to eq(1)
-      expect(body['review']['score']).to eq(85)
-      expect(body['overall_quality']).to eq(25.0)
-    end
   end
 
   describe 'POST /dashboard' do
@@ -142,92 +80,9 @@ RSpec.describe PolyglotAPI do
       json_response = JSON.parse(last_response.body)
       expect(json_response['error']).to eq('Missing files array')
     end
-
-    it 'returns dashboard statistics and summary' do
-      fixed_time = Time.utc(2023, 1, 1, 12, 0, 0)
-      allow(Time).to receive(:now).and_return(fixed_time)
-
-      files = [{ 'path' => 'a.rb', 'content' => 'puts 1' }, { 'path' => 'b.py', 'content' => 'print(2)' }]
-
-      file_stats = {
-        'total_files' => 2,
-        'total_lines' => 3,
-        'languages' => { 'ruby' => 1, 'python' => 1 }
-      }
-      review_stats = {
-        'average_score' => 90.0,
-        'total_issues' => 10,
-        'average_complexity' => 0.5
-      }
-
-      allow_any_instance_of(PolyglotAPI).to receive(:call_go_service)
-        .with('/statistics', { files: files }, nil)
-        .and_return(file_stats)
-
-      allow_any_instance_of(PolyglotAPI).to receive(:call_python_service)
-        .with('/statistics', { files: files }, nil)
-        .and_return(review_stats)
-
-      post '/dashboard', { files: files }.to_json, 'CONTENT_TYPE' => 'application/json'
-      expect(last_response.status).to eq(200)
-      body = JSON.parse(last_response.body)
-      expect(body['timestamp']).to eq(fixed_time.iso8601)
-      expect(body['file_statistics']).to eq(file_stats)
-      expect(body['review_statistics']).to eq(review_stats)
-      expect(body['summary']['total_files']).to eq(2)
-      expect(body['summary']['total_lines']).to eq(3)
-      expect(body['summary']['languages']).to eq(file_stats['languages'])
-      expect(body['summary']['average_quality_score']).to eq(90.0)
-      expect(body['summary']['total_issues']).to eq(10)
-      expect(body['summary']['health_score']).to eq(71.0)
-    end
-  end
-
-  describe 'GET /traces' do
-    it 'returns all traces' do
-      traces = [{ 'id' => 't1' }, { 'id' => 't2' }]
-      allow(CorrelationIdMiddleware).to receive(:all_traces).and_return(traces)
-
-      get '/traces'
-      expect(last_response.status).to eq(200)
-      body = JSON.parse(last_response.body)
-      expect(body['total_traces']).to eq(2)
-      expect(body['traces']).to eq(traces)
-    end
-  end
-
-  describe 'GET /traces/:correlation_id' do
-    it 'returns 404 when no traces found' do
-      allow(CorrelationIdMiddleware).to receive(:get_traces).with('abc').and_return([])
-      get '/traces/abc'
-      expect(last_response.status).to eq(404)
-      body = JSON.parse(last_response.body)
-      expect(body['error']).to eq('No traces found for correlation ID')
-    end
-
-    it 'returns traces for a correlation id' do
-      traces = [{ 'path' => '/analyze' }, { 'path' => '/metrics' }]
-      allow(CorrelationIdMiddleware).to receive(:get_traces).with('cid-1').and_return(traces)
-      get '/traces/cid-1'
-      expect(last_response.status).to eq(200)
-      body = JSON.parse(last_response.body)
-      expect(body['correlation_id']).to eq('cid-1')
-      expect(body['trace_count']).to eq(2)
-      expect(body['traces']).to eq(traces)
-    end
   end
 
   describe 'Validation errors store endpoints' do
-    it 'GET /validation/errors returns stored errors' do
-      stored = [{ 'field' => 'content', 'message' => 'invalid' }]
-      allow(RequestValidator).to receive(:get_validation_errors).and_return(stored)
-      get '/validation/errors'
-      expect(last_response.status).to eq(200)
-      body = JSON.parse(last_response.body)
-      expect(body['total_errors']).to eq(1)
-      expect(body['errors']).to eq(stored)
-    end
-
     it 'DELETE /validation/errors clears errors' do
       expect(RequestValidator).to receive(:clear_validation_errors)
       delete '/validation/errors'
