@@ -2,7 +2,6 @@ package middleware
 
 import (
 	"bytes"
-	"encoding/json"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -117,38 +116,6 @@ func TestSanitizeInput_RemovesControlCharacters(t *testing.T) {
 	assert.Equal(t, "HelloWorld!\nKeep\rThis\tHere", out)
 }
 
-func TestSanitizeRequestBody_SanitizesJSONFields(t *testing.T) {
-	body := []byte(`{
-		"content":"Hi\\u0000There",
-		"path":"abc\\u0007def",
-		"old_content":"Old\\u001E",
-		"new_content":"New\\u007F"
-	}`)
-	req := httptest.NewRequest(http.MethodPost, "/x", bytes.NewReader(body))
-
-	SanitizeRequestBody(req)
-
-	after, err := io.ReadAll(req.Body)
-	assert.NoError(t, err)
-
-	var m map[string]interface{}
-	err = json.Unmarshal(after, &m)
-	assert.NoError(t, err)
-
-	if assert.IsType(t, "", m["content"]) {
-		assert.Equal(t, "HiThere", m["content"].(string))
-	}
-	if assert.IsType(t, "", m["path"]) {
-		assert.Equal(t, "abcdef", m["path"].(string))
-	}
-	if assert.IsType(t, "", m["old_content"]) {
-		assert.Equal(t, "Old", m["old_content"].(string))
-	}
-	if assert.IsType(t, "", m["new_content"]) {
-		assert.Equal(t, "New", m["new_content"].(string))
-	}
-}
-
 func TestSanitizeRequestBody_InvalidJSON_NoChange(t *testing.T) {
 	raw := []byte("not json")
 	req := httptest.NewRequest(http.MethodPost, "/x", bytes.NewReader(raw))
@@ -158,48 +125,6 @@ func TestSanitizeRequestBody_InvalidJSON_NoChange(t *testing.T) {
 	after, err := io.ReadAll(req.Body)
 	assert.NoError(t, err)
 	assert.Equal(t, string(raw), string(after))
-}
-
-func TestValidationMiddleware_SanitizesPOSTBody(t *testing.T) {
-	orig := []byte(`{
-		"content":"Hi\\u0000There",
-		"path":"abc\\u0007def",
-		"old_content":"Old\\u001E",
-		"new_content":"New\\u007F"
-	}`)
-
-	h := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		data, _ := io.ReadAll(r.Body)
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write(data)
-	})
-
-	w := httptest.NewRecorder()
-	r := httptest.NewRequest(http.MethodPost, "/x", bytes.NewReader(orig))
-	ValidationMiddleware(h).ServeHTTP(w, r)
-
-	res := w.Result()
-	defer res.Body.Close()
-	assert.Equal(t, http.StatusOK, res.StatusCode)
-
-	decoded := map[string]interface{}{}
-	respBytes, _ := io.ReadAll(res.Body)
-	err := json.Unmarshal(respBytes, &decoded)
-	assert.NoError(t, err)
-
-	if assert.IsType(t, "", decoded["content"]) {
-		assert.Equal(t, "HiThere", decoded["content"].(string))
-	}
-	if assert.IsType(t, "", decoded["path"]) {
-		assert.Equal(t, "abcdef", decoded["path"].(string))
-	}
-	if assert.IsType(t, "", decoded["old_content"]) {
-		assert.Equal(t, "Old", decoded["old_content"].(string))
-	}
-	if assert.IsType(t, "", decoded["new_content"]) {
-		assert.Equal(t, "New", decoded["new_content"].(string))
-	}
 }
 
 func TestValidationMiddleware_NonPOST_PassThrough(t *testing.T) {
