@@ -118,7 +118,6 @@ func TestSanitizeInput_RemovesControlCharacters(t *testing.T) {
 }
 
 func TestSanitizeRequestBody_SanitizesJSONFields(t *testing.T) {
-	// Use escaped unicode to ensure JSON is valid; these will decode to control chars.
 	body := []byte(`{
 		"content":"Hi\\u0000There",
 		"path":"abc\\u0007def",
@@ -132,14 +131,22 @@ func TestSanitizeRequestBody_SanitizesJSONFields(t *testing.T) {
 	after, err := io.ReadAll(req.Body)
 	assert.NoError(t, err)
 
-	var m map[string]string
+	var m map[string]interface{}
 	err = json.Unmarshal(after, &m)
 	assert.NoError(t, err)
 
-	assert.Equal(t, "HiThere", m["content"])
-	assert.Equal(t, "abcdef", m["path"])
-	assert.Equal(t, "Old", m["old_content"])
-	assert.Equal(t, "New", m["new_content"])
+	if assert.IsType(t, "", m["content"]) {
+		assert.Equal(t, "HiThere", m["content"].(string))
+	}
+	if assert.IsType(t, "", m["path"]) {
+		assert.Equal(t, "abcdef", m["path"].(string))
+	}
+	if assert.IsType(t, "", m["old_content"]) {
+		assert.Equal(t, "Old", m["old_content"].(string))
+	}
+	if assert.IsType(t, "", m["new_content"]) {
+		assert.Equal(t, "New", m["new_content"].(string))
+	}
 }
 
 func TestSanitizeRequestBody_InvalidJSON_NoChange(t *testing.T) {
@@ -176,14 +183,23 @@ func TestValidationMiddleware_SanitizesPOSTBody(t *testing.T) {
 	defer res.Body.Close()
 	assert.Equal(t, http.StatusOK, res.StatusCode)
 
-	decoded := map[string]string{}
+	decoded := map[string]interface{}{}
 	respBytes, _ := io.ReadAll(res.Body)
 	err := json.Unmarshal(respBytes, &decoded)
 	assert.NoError(t, err)
-	assert.Equal(t, "HiThere", decoded["content"])
-	assert.Equal(t, "abcdef", decoded["path"])
-	assert.Equal(t, "Old", decoded["old_content"])
-	assert.Equal(t, "New", decoded["new_content"])
+
+	if assert.IsType(t, "", decoded["content"]) {
+		assert.Equal(t, "HiThere", decoded["content"].(string))
+	}
+	if assert.IsType(t, "", decoded["path"]) {
+		assert.Equal(t, "abcdef", decoded["path"].(string))
+	}
+	if assert.IsType(t, "", decoded["old_content"]) {
+		assert.Equal(t, "Old", decoded["old_content"].(string))
+	}
+	if assert.IsType(t, "", decoded["new_content"]) {
+		assert.Equal(t, "New", decoded["new_content"].(string))
+	}
 }
 
 func TestValidationMiddleware_NonPOST_PassThrough(t *testing.T) {
