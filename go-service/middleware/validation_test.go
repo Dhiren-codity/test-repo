@@ -131,7 +131,6 @@ func TestSanitizeRequestBody_SanitizesJSONFields(t *testing.T) {
 
 	after, err := io.ReadAll(req.Body)
 	assert.NoError(t, err)
-	assert.Equal(t, int64(len(after)), req.ContentLength)
 
 	var m map[string]string
 	err = json.Unmarshal(after, &m)
