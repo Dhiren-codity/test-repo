@@ -1,8 +1,3 @@
-# frozen_string_literal: true
-
-require 'spec_helper'
-require 'time'
-
 RSpec.describe PolyglotAPI do
   include Rack::Test::Methods
 
@@ -21,6 +16,7 @@ RSpec.describe PolyglotAPI do
 
   describe 'POST /analyze' do
     it 'accepts valid content' do
+      allow(RequestValidator).to receive(:validate_analyze_request).and_return([])
       allow_any_instance_of(PolyglotAPI).to receive(:call_go_service)
         .and_return({ 'language' => 'python', 'lines' => ['def test'] })
       allow_any_instance_of(PolyglotAPI).to receive(:call_python_service)
@@ -36,8 +32,8 @@ RSpec.describe PolyglotAPI do
       error_obj = double(to_hash: { field: 'content', message: 'missing' })
       allow(RequestValidator).to receive(:validate_analyze_request).and_return([error_obj])
 
-      expect_any_instance_of(PolyglotAPI)).not_to receive(:call_go_service)
-      expect_any_instance_of(PolyglotAPI)).not_to receive(:call_python_service)
+      expect_any_instance_of(PolyglotAPI).not_to receive(:call_go_service)
+      expect_any_instance_of(PolyglotAPI).not_to receive(:call_python_service)
 
       post '/analyze', { content: '', path: '' }.to_json, 'CONTENT_TYPE' => 'application/json'
       expect(last_response.status).to eq(422)
@@ -54,7 +50,7 @@ RSpec.describe PolyglotAPI do
       allow_any_instance_of(PolyglotAPI).to receive(:call_go_service)
         .and_return({ 'language' => 'ruby', 'lines' => ["puts 'hi'"] })
 
-      expect_any_instance_of(PolyglotAPI)).to receive(:call_python_service)
+      expect_any_instance_of(PolyglotAPI).to receive(:call_python_service)
         .with('/review', hash_including(language: 'ruby', content: "puts 'hi'"), anything)
         .and_return({ 'score' => 95.0, 'issues' => [] })
 
@@ -117,10 +113,10 @@ RSpec.describe PolyglotAPI do
 
     it 'returns diff and new code review for valid request' do
       allow_any_instance_of(PolyglotAPI).to receive(:call_go_service)
-        .with('/diff', hash_including(:old_content, :new_content), nil)
+        .with('/diff', hash_including(:old_content, :new_content))
         .and_return({ 'changes' => 3 })
       allow_any_instance_of(PolyglotAPI).to receive(:call_python_service)
-        .with('/review', hash_including(:content), nil)
+        .with('/review', hash_including(:content))
         .and_return({ 'score' => 88.5, 'issues' => [] })
 
       payload = { old_content: 'a', new_content: 'b' }

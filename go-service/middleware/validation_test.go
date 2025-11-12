@@ -240,10 +240,10 @@ func TestSanitizeInput_RemovesControlCharacters(t *testing.T) {
 
 func TestSanitizeRequestBody_ValidJSON_SanitizedFields(t *testing.T) {
 	body := `{
-		"content":"Hello\x00World",
-		"path":"good/\x01path",
-		"old_content":"Old\x0BVal",
-		"new_content":"New\x7FVal",
+		"content":"Hello\u0000World",
+		"path":"good/\u0001path",
+		"old_content":"Old\u000BVal",
+		"new_content":"New\u007FVal",
 		"other":"untouched"
 	}`
 	r := httptest.NewRequest(http.MethodPost, "/", bytes.NewBufferString(body))
@@ -288,7 +288,7 @@ func TestValidationMiddleware_SanitizesPOSTBody(t *testing.T) {
 
 	srv := ValidationMiddleware(h)
 
-	reqBody := `{"content":"Hi\x00There"}`
+	reqBody := `{"content":"Hi\u0000There"}`
 	r := httptest.NewRequest(http.MethodPost, "/", bytes.NewBufferString(reqBody))
 	w := httptest.NewRecorder()
 
@@ -312,7 +312,7 @@ func TestValidationMiddleware_DoesNotSanitizeNonPOST(t *testing.T) {
 
 	srv := ValidationMiddleware(h)
 
-	reqBody := `{"content":"Hi\x00There"}`
+	reqBody := `{"content":"Hi\u0000There"}`
 	r := httptest.NewRequest(http.MethodGet, "/", bytes.NewBufferString(reqBody))
 	w := httptest.NewRecorder()
 
