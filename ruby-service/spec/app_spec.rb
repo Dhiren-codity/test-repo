@@ -147,14 +147,13 @@ RSpec.describe PolyglotAPI do
         .and_return({ 'complexity' => 0, 'other' => 1 })
       allow_any_instance_of(PolyglotAPI).to receive(:call_python_service)
         .with('/review', hash_including(content: 'code'))
-        .and_return({ 'score' => 90, 'issues' => [{}, {}] }) # 2 issues -> penalty 1.0
+        .and_return({ 'score' => 90, 'issues' => [{}, {}] })
 
       post '/metrics', { content: 'code' }.to_json, 'CONTENT_TYPE' => 'application/json'
       expect(last_response.status).to eq(200)
       json = JSON.parse(last_response.body)
       expect(json['metrics']).to include('complexity' => 0)
       expect(json['review']).to include('score' => 90)
-      # base 0.9 - 0 - 1.0 = -0.1 => 0 after clamp
       expect(json['overall_quality']).to eq(0)
     end
 
@@ -207,7 +206,6 @@ RSpec.describe PolyglotAPI do
       expect(json).to have_key('timestamp')
       expect(json['file_statistics']).to include('total_files' => 2)
       expect(json['review_statistics']).to include('average_score' => 80)
-      # health = 80 - (4/2)*2 - 1.0*30 = 80 - 4 - 30 = 46
       expect(json['summary']).to include('health_score' => 46.0)
     end
   end
