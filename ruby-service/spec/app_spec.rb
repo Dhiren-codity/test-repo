@@ -1,5 +1,3 @@
-# frozen_string_literal: true
-
 RSpec.describe PolyglotAPI do
   include Rack::Test::Methods
 
@@ -107,10 +105,10 @@ RSpec.describe PolyglotAPI do
       metrics = { 'complexity' => 2 }
       review  = { 'score' => 90, 'issues' => ['a'] }
       allow_any_instance_of(PolyglotAPI).to receive(:call_go_service)
-        .with('/metrics', hash_including('content' => 'hello'))
+        .with('/metrics', hash_including(content: 'hello'))
         .and_return(metrics)
       allow_any_instance_of(PolyglotAPI).to receive(:call_python_service)
-        .with('/review', hash_including('content' => 'hello'))
+        .with('/review', hash_including(content: 'hello'))
         .and_return(review)
 
       post '/metrics', { content: 'hello' }.to_json, 'CONTENT_TYPE' => 'application/json'
@@ -146,10 +144,10 @@ RSpec.describe PolyglotAPI do
       }
 
       allow_any_instance_of(PolyglotAPI).to receive(:call_go_service)
-        .with('/statistics', hash_including('files' => array_including('a.rb', 'b.py')))
+        .with('/statistics', hash_including(files: array_including('a.rb', 'b.py')))
         .and_return(file_stats)
       allow_any_instance_of(PolyglotAPI).to receive(:call_python_service)
-        .with('/statistics', hash_including('files' => array_including('a.rb', 'b.py')))
+        .with('/statistics', hash_including(files: array_including('a.rb', 'b.py')))
         .and_return(review_stats)
       allow_any_instance_of(PolyglotAPI).to receive(:calculate_dashboard_health_score)
         .with(file_stats, review_stats)
@@ -212,7 +210,7 @@ RSpec.describe PolyglotAPI do
   describe 'validation errors endpoints' do
     it 'GET /validation/errors returns stored errors' do
       errors = [{ field: 'content', message: 'missing' }]
-      allow(RequestValidator).to receive(:get_validation_errors).and_return(errors)
+      allow(RequestValidator).to receive(:get_validation_errors).and.return(errors)
 
       get '/validation/errors'
       expect(last_response.status).to eq(200)
@@ -257,7 +255,6 @@ RSpec.describe PolyglotAPI do
       it 'calculates score with penalties and clamps to 0' do
         metrics = { 'complexity' => 10 }
         review = { 'score' => 50, 'issues' => %w[a b c] }
-        # base 0.5, complexity_penalty 1.0, issue_penalty 1.5 => final -2.0 -> 0
         expect(instance.send(:calculate_quality_score, metrics, review)).to eq(0)
       end
 
@@ -286,7 +283,6 @@ RSpec.describe PolyglotAPI do
         file_stats = { 'total_files' => 5 }
         review_stats = { 'average_score' => 80,
                          'total_issues' => 10, 'average_complexity' => 0.5 }
-        # issue_penalty = (10/5)*2 = 4; complexity_penalty = 0.5*30 = 15; 80-4-15=61
         expect(instance.send(:calculate_dashboard_health_score,
                              file_stats, review_stats)).to eq(61.0)
 
