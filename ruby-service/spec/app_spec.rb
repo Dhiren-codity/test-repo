@@ -138,10 +138,10 @@ RSpec.describe PolyglotAPI do
 
     it 'returns metrics, review, and clamped overall_quality' do
       allow_any_instance_of(PolyglotAPI).to receive(:call_go_service)
-        .with('/metrics', hash_including(:content), nil)
+        .with('/metrics', hash_including(:content))
         .and_return({ 'complexity' => 20 })
       allow_any_instance_of(PolyglotAPI).to receive(:call_python_service)
-        .with('/review', hash_including(:content), nil)
+        .with('/review', hash_including(:content))
         .and_return({ 'score' => 50, 'issues' => Array.new(10, { 'type' => 'warn' }) })
 
       post '/metrics', { content: 'code' }.to_json, 'CONTENT_TYPE' => 'application/json'
@@ -177,10 +177,10 @@ RSpec.describe PolyglotAPI do
       }
 
       allow_any_instance_of(PolyglotAPI).to receive(:call_go_service)
-        .with('/statistics', hash_including(:files), nil)
+        .with('/statistics', hash_including(:files))
         .and_return(file_stats)
       allow_any_instance_of(PolyglotAPI).to receive(:call_python_service)
-        .with('/statistics', hash_including(:files), nil)
+        .with('/statistics', hash_including(:files))
         .and_return(review_stats)
 
       files_payload = { files: [{ 'path' => 'a.rb', 'content' => 'puts 1' }] }

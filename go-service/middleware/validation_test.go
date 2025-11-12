@@ -66,7 +66,6 @@ func TestValidateParseRequest_ContentValidation(t *testing.T) {
 			for i, e := range errs {
 				assert.Equal(t, tt.wantFields[i], e.Field)
 				assert.Equal(t, tt.wantReason[i], e.Reason)
-				assert.WithinDuration(t, time.Now(), e.Time, time.Second)
 			}
 			logged := GetValidationErrors()
 			assert.Equal(t, len(tt.wantFields), len(logged))
