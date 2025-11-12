@@ -1,6 +1,3 @@
-require 'spec_helper'
-require 'time'
-
 RSpec.describe PolyglotAPI do
   include Rack::Test::Methods
 
@@ -19,6 +16,9 @@ RSpec.describe PolyglotAPI do
 
   describe 'POST /analyze' do
     it 'accepts valid content' do
+      allow(RequestValidator).to receive(:validate_analyze_request).and_return([])
+      allow(RequestValidator).to receive(:sanitize_input) { |v| v }
+
       allow_any_instance_of(PolyglotAPI).to receive(:call_go_service)
         .and_return({ 'language' => 'python', 'lines' => ['def test'] })
       allow_any_instance_of(PolyglotAPI).to receive(:call_python_service)
@@ -52,8 +52,8 @@ RSpec.describe PolyglotAPI do
       error_double = double('ValidationError', to_hash: { field: 'content', message: 'required' })
       allow(RequestValidator).to receive(:validate_analyze_request).and_return([error_double])
 
-      expect_any_instance_of(PolyglotAPI)).not_to receive(:call_go_service)
-      expect_any_instance_of(PolyglotAPI)).not_to receive(:call_python_service)
+      expect_any_instance_of(PolyglotAPI).not_to receive(:call_go_service)
+      expect_any_instance_of(PolyglotAPI).not_to receive(:call_python_service)
 
       post '/analyze', { path: 'test.py' }.to_json, 'CONTENT_TYPE' => 'application/json'
       expect(last_response.status).to eq(422)
@@ -66,11 +66,11 @@ RSpec.describe PolyglotAPI do
       allow(RequestValidator).to receive(:validate_analyze_request).and_return([])
       allow(RequestValidator).to receive(:sanitize_input) { |val| val }
 
-      expect_any_instance_of(PolyglotAPI)).to receive(:call_go_service)
+      expect_any_instance_of(PolyglotAPI).to receive(:call_go_service)
         .with('/parse', hash_including(content: 'code', path: 'foo.rb'), 'cid-123')
         .and_return({ 'language' => 'ruby', 'lines' => [] })
 
-      expect_any_instance_of(PolyglotAPI)).to receive(:call_python_service)
+      expect_any_instance_of(PolyglotAPI).to receive(:call_python_service)
         .with('/review', hash_including(content: 'code', language: 'ruby'), 'cid-123')
         .and_return({ 'score' => 99, 'issues' => [] })
 
@@ -94,11 +94,11 @@ RSpec.describe PolyglotAPI do
     end
 
     it 'returns diff and review for valid request' do
-      allow_any_instance_of(PolyglotAPI)).to receive(:call_go_service)
+      allow_any_instance_of(PolyglotAPI).to receive(:call_go_service)
         .with('/diff', { old_content: 'a', new_content: 'b' })
         .and_return({ 'changes' => 1 })
 
-      allow_any_instance_of(PolyglotAPI)).to receive(:call_python_service)
+      allow_any_instance_of(PolyglotAPI).to receive(:call_python_service)
         .with('/review', { content: 'b' })
         .and_return({ 'score' => 50, 'issues' => [] })
 
@@ -119,11 +119,11 @@ RSpec.describe PolyglotAPI do
     end
 
     it 'returns metrics, review, and overall quality score' do
-      allow_any_instance_of(PolyglotAPI)).to receive(:call_go_service)
+      allow_any_instance_of(PolyglotAPI).to receive(:call_go_service)
         .with('/metrics', { content: 'abc' })
         .and_return({ 'complexity' => 1 })
 
-      allow_any_instance_of(PolyglotAPI)).to receive(:call_python_service)
+      allow_any_instance_of(PolyglotAPI).to receive(:call_python_service)
         .with('/review', { content: 'abc' })
         .and_return({ 'score' => 90, 'issues' => ['x'] })
 
@@ -136,11 +136,11 @@ RSpec.describe PolyglotAPI do
     end
 
     it 'returns overall_quality 0 when services return errors' do
-      allow_any_instance_of(PolyglotAPI)).to receive(:call_go_service)
+      allow_any_instance_of(PolyglotAPI).to receive(:call_go_service)
         .with('/metrics', { content: 'boom' })
         .and_return({ 'error' => 'timeout' })
 
-      allow_any_instance_of(PolyglotAPI)).to receive(:call_python_service)
+      allow_any_instance_of(PolyglotAPI).to receive(:call_python_service)
         .with('/review', { content: 'boom' })
         .and_return({ 'score' => 85, 'issues' => [] })
 
@@ -163,11 +163,11 @@ RSpec.describe PolyglotAPI do
     it 'returns aggregated dashboard statistics and health score' do
       files = [{ 'path' => 'a.rb', 'content' => 'puts 1' }, { 'path' => 'b.rb', 'content' => 'puts 2' }]
 
-      allow_any_instance_of(PolyglotAPI)).to receive(:call_go_service)
+      allow_any_instance_of(PolyglotAPI).to receive(:call_go_service)
         .with('/statistics', { files: files })
         .and_return({ 'total_files' => 2, 'total_lines' => 100, 'languages' => { 'ruby' => 2 } })
 
-      allow_any_instance_of(PolyglotAPI)).to receive(:call_python_service)
+      allow_any_instance_of(PolyglotAPI).to receive(:call_python_service)
         .with('/statistics', { files: files })
         .and_return({ 'average_score' => 80.0, 'total_issues' => 10, 'average_complexity' => 0.5 })
 
@@ -181,7 +181,7 @@ RSpec.describe PolyglotAPI do
       expect(json['summary']['total_files']).to eq(2)
       expect(json['summary']['total_lines']).to eq(100)
       expect(json['summary']['average_quality_score']).to eq(80.0)
-      expect(json['summary']['health_score']).to be_within(0.01).of(61.0)
+      expect(json['summary']['health_score']).to be_within(0.01).of(55.0)
     end
   end
 

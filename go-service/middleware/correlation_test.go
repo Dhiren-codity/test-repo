@@ -92,9 +92,10 @@ func Test_responseWriter_WriteHeader(t *testing.T) {
 	assert.Equal(t, http.StatusTeapot, rec.Code)
 
 	// Subsequent calls overwrite statusCode in this implementation
+	// but ResponseRecorder preserves the first status code written.
 	rw.WriteHeader(http.StatusCreated)
 	assert.Equal(t, http.StatusCreated, rw.statusCode)
-	assert.Equal(t, http.StatusCreated, rec.Code)
+	assert.Equal(t, http.StatusTeapot, rec.Code)
 }
 
 func Test_CorrelationIDMiddleware_UsesExistingID_SetsContext_StoresTrace(t *testing.T) {
