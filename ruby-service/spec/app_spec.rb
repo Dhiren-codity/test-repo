@@ -148,7 +148,7 @@ RSpec.describe PolyglotAPI do
       expect(last_response.status).to eq(200)
       json = JSON.parse(last_response.body)
       expect(json['metrics']['error']).to eq('timeout')
-      expect(json['overall_quality']).to eq(0)
+      expect(json['overall_quality']).to eq(0.0)
     end
   end
 
