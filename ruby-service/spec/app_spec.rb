@@ -16,6 +16,9 @@ RSpec.describe PolyglotAPI do
 
   describe 'POST /analyze' do
     it 'accepts valid content' do
+      allow(RequestValidator).to receive(:validate_analyze_request).and_return([])
+      allow(RequestValidator).to receive(:sanitize_input) { |arg| arg }
+
       allow_any_instance_of(PolyglotAPI).to receive(:call_go_service)
         .and_return({ 'language' => 'python', 'lines' => ['def test'] })
       allow_any_instance_of(PolyglotAPI).to receive(:call_python_service)
@@ -210,7 +213,7 @@ RSpec.describe PolyglotAPI do
   describe 'validation errors endpoints' do
     it 'GET /validation/errors returns stored errors' do
       errors = [{ field: 'content', message: 'missing' }]
-      allow(RequestValidator).to receive(:get_validation_errors).and.return(errors)
+      allow(RequestValidator).to receive(:get_validation_errors).and_return(errors)
 
       get '/validation/errors'
       expect(last_response.status).to eq(200)
