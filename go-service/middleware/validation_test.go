@@ -216,7 +216,7 @@ func TestValidateDiffRequest(t *testing.T) {
 func TestSanitizeInput_RemovesControlCharsExceptAllowed(t *testing.T) {
 	in := "A\x00B\x01C\nD\tE\rF\x0B\x0C\x0E\x7F"
 	out := SanitizeInput(in)
-	assert.Equal(t, "AB\nD\tE\rF", out)
+	assert.Equal(t, "ABC\nD\tE\rF", out)
 }
 
 func TestSanitizeRequestBody_SanitizesKnownFields(t *testing.T) {
@@ -283,7 +283,7 @@ func TestValidationMiddleware_SanitizesPostBody(t *testing.T) {
 
 	mw := ValidationMiddleware(handler)
 
-	reqBody := `{"content":"a` + "\x00" + `b","path":"h` + "\x01" + `ome"}`
+	reqBody := `{"content":"a\u0000b","path":"h\u0001ome"}`
 	req := httptest.NewRequest(http.MethodPost, "/", bytes.NewBufferString(reqBody))
 	rr := httptest.NewRecorder()
 
