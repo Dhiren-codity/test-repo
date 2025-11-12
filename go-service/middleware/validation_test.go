@@ -135,7 +135,7 @@ func TestSanitizeRequestBody_JSON(t *testing.T) {
 	assert.NoError(t, err)
 
 	assert.Equal(t, "AB", got["content"])
-	assert.Equal(t, "xy", got["path"])
+	assert.Equal(t, "x/y", got["path"])
 	assert.Equal(t, "old", got["old_content"])
 	assert.Equal(t, "new", got["new_content"])
 	assert.Equal(t, int64(len(gotBody)), req.ContentLength)

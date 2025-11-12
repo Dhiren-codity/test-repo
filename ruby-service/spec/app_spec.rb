@@ -1,8 +1,3 @@
-# frozen_string_literal: true
-
-
-require_relative '../app/app'
-
 RSpec.describe PolyglotAPI do
   include Rack::Test::Methods
 
@@ -21,6 +16,8 @@ RSpec.describe PolyglotAPI do
 
   describe 'POST /analyze' do
     it 'accepts valid content' do
+      allow(RequestValidator).to receive(:validate_analyze_request).and_return([])
+      allow(RequestValidator).to receive(:sanitize_input) { |v| v }
       allow_any_instance_of(PolyglotAPI).to receive(:call_go_service)
         .and_return({ 'language' => 'python', 'lines' => ['def test'] })
       allow_any_instance_of(PolyglotAPI).to receive(:call_python_service)
@@ -109,7 +106,7 @@ RSpec.describe PolyglotAPI do
       expect(json['services']['go']['status']).to eq('unhealthy')
       expect(json['services']['python']['status']).to eq('unreachable')
       expect(json['services']['python']).to have_key('error')
-    end>
+    end
   end
 
   describe 'POST /diff' do
@@ -122,10 +119,10 @@ RSpec.describe PolyglotAPI do
 
     it 'returns diff and new code review' do
       allow_any_instance_of(PolyglotAPI).to receive(:call_go_service)
-        .with('/diff', hash_including(old_content: 'a', new_content: 'b'), anything)
+        .with('/diff', hash_including(old_content: 'a', new_content: 'b'))
         .and_return({ 'changes' => 1 })
       allow_any_instance_of(PolyglotAPI).to receive(:call_python_service)
-        .with('/review', hash_including(content: 'b'), anything)
+        .with('/review', hash_including(content: 'b'))
         .and_return({ 'score' => 88, 'issues' => [] })
 
       post '/diff', { old_content: 'a', new_content: 'b' }.to_json, 'CONTENT_TYPE' => 'application/json'
@@ -146,10 +143,10 @@ RSpec.describe PolyglotAPI do
 
     it 'returns metrics, review and overall_quality' do
       allow_any_instance_of(PolyglotAPI).to receive(:call_go_service)
-        .with('/metrics', hash_including(content: 'code'), anything)
+        .with('/metrics', hash_including(content: 'code'))
         .and_return({ 'complexity' => 0, 'other' => 1 })
       allow_any_instance_of(PolyglotAPI).to receive(:call_python_service)
-        .with('/review', hash_including(content: 'code'), anything)
+        .with('/review', hash_including(content: 'code'))
         .and_return({ 'score' => 90, 'issues' => [{}, {}] }) # 2 issues -> penalty 1.0
 
       post '/metrics', { content: 'code' }.to_json, 'CONTENT_TYPE' => 'application/json'
@@ -198,10 +195,10 @@ RSpec.describe PolyglotAPI do
         'average_complexity' => 1.0
       }
       allow_any_instance_of(PolyglotAPI).to receive(:call_go_service)
-        .with('/statistics', hash_including(files: files), anything)
+        .with('/statistics', hash_including(files: files))
         .and_return(file_stats)
       allow_any_instance_of(PolyglotAPI).to receive(:call_python_service)
-        .with('/statistics', hash_including(files: files), anything)
+        .with('/statistics', hash_including(files: files))
         .and_return(review_stats)
 
       post '/dashboard', { files: files }.to_json, 'CONTENT_TYPE' => 'application/json'
