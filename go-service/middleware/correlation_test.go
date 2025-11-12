@@ -232,8 +232,8 @@ func TestResponseWriter_WriteHeader_SetsStatusAndPassesThrough(t *testing.T) {
 	assert.Equal(t, http.StatusCreated, rw.statusCode)
 	assert.Equal(t, http.StatusCreated, rec.Code)
 
-	// subsequent call updates our wrapper's status; ResponseRecorder will reflect the latest call as well
+	// subsequent call updates our wrapper's status; ResponseRecorder keeps the first status code
 	rw.WriteHeader(http.StatusInternalServerError)
 	assert.Equal(t, http.StatusInternalServerError, rw.statusCode)
-	assert.Equal(t, http.StatusInternalServerError, rec.Code)
+	assert.Equal(t, http.StatusCreated, rec.Code)
 }

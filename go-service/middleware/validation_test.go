@@ -108,7 +108,7 @@ func TestValidateParseRequest_PathValidation(t *testing.T) {
 		{
 			name:       "path with both long and traversal",
 			content:    "ok",
-			path:       strings.Repeat("a", MaxPathLength-3) + "../",
+			path:       strings.Repeat("a", MaxPathLength-2) + "../",
 			wantFields: []string{"path", "path"},
 			wantReason: []string{"Path exceeds maximum length", "Path contains potential directory traversal"},
 		},
@@ -146,7 +146,7 @@ func TestValidateParseRequest_MultipleErrorsAccumulation(t *testing.T) {
 	t.Cleanup(ClearValidationErrors)
 
 	content := ""
-	path := strings.Repeat("a", MaxPathLength-3) + "../"
+	path := strings.Repeat("a", MaxPathLength-2) + "../"
 	errs := ValidateParseRequest(content, path)
 	// Should include one error for content and two for path
 	assert.Equal(t, 3, len(errs))
