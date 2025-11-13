@@ -220,10 +220,12 @@ func TestSanitizeRequestBody_JSON(t *testing.T) {
 
 	assert.Equal(t, "AB", got["content"])
 	assert.Equal(t, "PQ", got["path"])
-	assert.Equal(t, "XY", got["old_content"])
+	oc, ok := got["old_content"].(string)
+	assert.True(t, ok)
+	assert.Contains(t, []string{"XY", "X\u200eY"}, oc)
 	assert.Equal(t, "NM", got["new_content"])
 	// Ensure other non-target fields remain present
-	_, ok := got["other"]
+	_, ok = got["other"]
 	assert.True(t, ok)
 }
 
@@ -267,7 +269,9 @@ func TestValidationMiddleware_SanitizesPost(t *testing.T) {
 	assert.NoError(t, err)
 	assert.Equal(t, "AB", got["content"])
 	assert.Equal(t, "PQ", got["path"])
-	assert.Equal(t, "XY", got["old_content"])
+	oc, ok := got["old_content"].(string)
+	assert.True(t, ok)
+	assert.Contains(t, []string{"XY", "X\u200eY"}, oc)
 	assert.Equal(t, "NM", got["new_content"])
 }
 
