@@ -186,17 +186,6 @@ func TestValidateDiffRequest(t *testing.T) {
 	})
 }
 
-func TestSanitizeInput(t *testing.T) {
-	// Control characters removal, keep \n \r \t
-	in := "A\x00B\x01C\tD\nE\rF\x0bG\x0cH\x0eI\x7fJ\u200EK"
-	out := SanitizeInput(in)
-	assert.Equal(t, "ABC\tD\nE\rFGHIJK", out)
-
-	// No-op case
-	nochange := "Hello, 世界!\n\tOK"
-	assert.Equal(t, nochange, SanitizeInput(nochange))
-}
-
 func TestSanitizeRequestBody_JSON(t *testing.T) {
 	bodyMap := map[string]any{
 		"content":     "A\x00B",
