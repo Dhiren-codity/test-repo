@@ -6,9 +6,6 @@ import (
 	"sync"
 	"testing"
 	"time"
-
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
 )
 
 func resetTraceStorage() {
@@ -47,15 +44,21 @@ func TestIsValidCorrelationID_Table(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			got := isValidCorrelationID(tt.id)
-			assert.Equal(t, tt.want, got)
+			if got != tt.want {
+				t.Fatalf("isValidCorrelationID(%q) = %v, want %v", tt.id, got, tt.want)
+			}
 		})
 	}
 }
 
 func TestGenerateCorrelationID_IsValid(t *testing.T) {
 	id := generateCorrelationID()
-	assert.NotEmpty(t, id)
-	assert.True(t, isValidCorrelationID(id))
+	if id == "" {
+		t.Fatal("generated correlation ID should not be empty")
+	}
+	if !isValidCorrelationID(id) {
+		t.Fatalf("generated correlation ID should be valid, got %q", id)
+	}
 }
 
 func TestExtractOrGenerateCorrelationID(t *testing.T) {
@@ -63,21 +66,29 @@ func TestExtractOrGenerateCorrelationID(t *testing.T) {
 		r := httptest.NewRequest(http.MethodGet, "/", nil)
 		r.Header.Set(CorrelationIDHeader, "valid-1234567890")
 		got := extractOrGenerateCorrelationID(r)
-		assert.Equal(t, "valid-1234567890", got)
+		if got != "valid-1234567890" {
+			t.Fatalf("extractOrGenerateCorrelationID did not use existing header, got %q", got)
+		}
 	})
 
 	t.Run("generates when missing", func(t *testing.T) {
 		r := httptest.NewRequest(http.MethodGet, "/", nil)
 		got := extractOrGenerateCorrelationID(r)
-		assert.NotEmpty(t, got)
+		if got == "" {
+			t.Fatal("should generate correlation ID when missing")
+		}
 	})
 
 	t.Run("generates when invalid", func(t *testing.T) {
 		r := httptest.NewRequest(http.MethodGet, "/", nil)
 		r.Header.Set(CorrelationIDHeader, "bad$id")
 		got := extractOrGenerateCorrelationID(r)
-		assert.NotEqual(t, "bad$id", got)
-		assert.True(t, isValidCorrelationID(got))
+		if got == "bad$id" {
+			t.Fatal("should not return invalid header value")
+		}
+		if !isValidCorrelationID(got) {
+			t.Fatalf("generated ID should be valid, got %q", got)
+		}
 	})
 }
 
@@ -85,7 +96,9 @@ func TestExtractOrGenerateID_Exported(t *testing.T) {
 	r := httptest.NewRequest(http.MethodGet, "/", nil)
 	r.Header.Set(CorrelationIDHeader, "valid-1234567890")
 	got := ExtractOrGenerateID(r)
-	assert.Equal(t, "valid-1234567890", got)
+	if got != "valid-1234567890" {
+		t.Fatalf("ExtractOrGenerateID = %q, want %q", got, "valid-1234567890")
+	}
 }
 
 func TestResponseWriter_WriteHeader(t *testing.T) {
@@ -93,8 +106,12 @@ func TestResponseWriter_WriteHeader(t *testing.T) {
 	rw := &responseWriter{ResponseWriter: rec, statusCode: http.StatusOK}
 
 	rw.WriteHeader(http.StatusTeapot)
-	assert.Equal(t, http.StatusTeapot, rw.statusCode)
-	assert.Equal(t, http.StatusTeapot, rec.Code)
+	if rw.statusCode != http.StatusTeapot {
+		t.Fatalf("statusCode = %d, want %d", rw.statusCode, http.StatusTeapot)
+	}
+	if rec.Code != http.StatusTeapot {
+		t.Fatalf("rec.Code = %d, want %d", rec.Code, http.StatusTeapot)
+	}
 }
 
 func TestCorrelationIDMiddleware_SetsHeaderContextAndStoresTrace_WithExplicitStatus(t *testing.T) {
@@ -102,11 +119,14 @@ func TestCorrelationIDMiddleware_SetsHeaderContextAndStoresTrace_WithExplicitSta
 
 	var ctxID string
 	h := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// Check context has correlation ID
 		val := r.Context().Value(CorrelationIDKey)
-		require.NotNil(t, val)
+		if val == nil {
+			t.Fatal("context value for CorrelationIDKey should not be nil")
+		}
 		cid, ok := val.(string)
-		require.True(t, ok)
+		if !ok {
+			t.Fatal("context correlation ID should be a string")
+		}
 		ctxID = cid
 		time.Sleep(10 * time.Millisecond)
 		w.WriteHeader(http.StatusCreated)
@@ -119,19 +139,36 @@ func TestCorrelationIDMiddleware_SetsHeaderContextAndStoresTrace_WithExplicitSta
 	mw.ServeHTTP(rr, req)
 
 	respID := rr.Header().Get(CorrelationIDHeader)
-	require.NotEmpty(t, respID)
-	assert.Equal(t, respID, ctxID)
+	if respID == "" {
+		t.Fatal("response should have correlation ID header")
+	}
+	if respID != ctxID {
+		t.Fatalf("response ID %q != context ID %q", respID, ctxID)
+	}
 
-	// Trace should be stored
 	traces := GetTraces(respID)
-	require.Len(t, traces, 1)
+	if len(traces) != 1 {
+		t.Fatalf("expected 1 trace, got %d", len(traces))
+	}
 	td := traces[0]
-	assert.Equal(t, "go-parser", td.Service)
-	assert.Equal(t, http.MethodGet, td.Method)
-	assert.Equal(t, "/test/path", td.Path)
-	assert.Equal(t, respID, td.CorrelationID)
-	assert.Equal(t, http.StatusCreated, td.Status)
-	assert.GreaterOrEqual(t, td.DurationMS, float64(1)) // should be at least 1ms due to sleep
+	if td.Service != "go-parser" {
+		t.Fatalf("Service = %q, want %q", td.Service, "go-parser")
+	}
+	if td.Method != http.MethodGet {
+		t.Fatalf("Method = %q, want %q", td.Method, http.MethodGet)
+	}
+	if td.Path != "/test/path" {
+		t.Fatalf("Path = %q, want %q", td.Path, "/test/path")
+	}
+	if td.CorrelationID != respID {
+		t.Fatalf("CorrelationID = %q, want %q", td.CorrelationID, respID)
+	}
+	if td.Status != http.StatusCreated {
+		t.Fatalf("Status = %d, want %d", td.Status, http.StatusCreated)
+	}
+	if !(td.DurationMS >= 1) {
+		t.Fatalf("DurationMS = %f, want >= 1", td.DurationMS)
+	}
 }
 
 func TestCorrelationIDMiddleware_DefaultStatusWhenNoWriteHeader(t *testing.T) {
@@ -147,11 +184,17 @@ func TestCorrelationIDMiddleware_DefaultStatusWhenNoWriteHeader(t *testing.T) {
 	mw := CorrelationIDMiddleware(h)
 	mw.ServeHTTP(rr, req)
 	respID := rr.Header().Get(CorrelationIDHeader)
-	require.NotEmpty(t, respID)
+	if respID == "" {
+		t.Fatal("response should have correlation ID header")
+	}
 
 	traces := GetTraces(respID)
-	require.Len(t, traces, 1)
-	assert.Equal(t, http.StatusOK, traces[0].Status)
+	if len(traces) != 1 {
+		t.Fatalf("expected 1 trace, got %d", len(traces))
+	}
+	if traces[0].Status != http.StatusOK {
+		t.Fatalf("Status = %d, want %d", traces[0].Status, http.StatusOK)
+	}
 }
 
 func TestCorrelationIDMiddleware_UsesExistingValidID(t *testing.T) {
@@ -168,11 +211,17 @@ func TestCorrelationIDMiddleware_UsesExistingValidID(t *testing.T) {
 	mw := CorrelationIDMiddleware(h)
 	mw.ServeHTTP(rr, req)
 
-	assert.Equal(t, "existing-1234567890", rr.Header().Get(CorrelationIDHeader))
+	if got := rr.Header().Get(CorrelationIDHeader); got != "existing-1234567890" {
+		t.Fatalf("Header %s = %q, want %q", CorrelationIDHeader, got, "existing-1234567890")
+	}
 
 	traces := GetTraces("existing-1234567890")
-	require.Len(t, traces, 1)
-	assert.Equal(t, http.StatusAccepted, traces[0].Status)
+	if len(traces) != 1 {
+		t.Fatalf("expected 1 trace, got %d", len(traces))
+	}
+	if traces[0].Status != http.StatusAccepted {
+		t.Fatalf("Status = %d, want %d", traces[0].Status, http.StatusAccepted)
+	}
 }
 
 func TestTrackRequest_StoresWhenHeaderPresent(t *testing.T) {
@@ -184,13 +233,25 @@ func TestTrackRequest_StoresWhenHeaderPresent(t *testing.T) {
 	TrackRequest(req, http.StatusAccepted)
 
 	traces := GetTraces("cid-1234567890")
-	require.Len(t, traces, 1)
+	if len(traces) != 1 {
+		t.Fatalf("expected 1 trace, got %d", len(traces))
+	}
 	td := traces[0]
-	assert.Equal(t, "go-parser", td.Service)
-	assert.Equal(t, http.MethodPost, td.Method)
-	assert.Equal(t, "/track", td.Path)
-	assert.Equal(t, http.StatusAccepted, td.Status)
-	assert.NotZero(t, td.Timestamp.Unix())
+	if td.Service != "go-parser" {
+		t.Fatalf("Service = %q, want %q", td.Service, "go-parser")
+	}
+	if td.Method != http.MethodPost {
+		t.Fatalf("Method = %q, want %q", td.Method, http.MethodPost)
+	}
+	if td.Path != "/track" {
+		t.Fatalf("Path = %q, want %q", td.Path, "/track")
+	}
+	if td.Status != http.StatusAccepted {
+		t.Fatalf("Status = %d, want %d", td.Status, http.StatusAccepted)
+	}
+	if td.Timestamp.Unix() == 0 {
+		t.Fatalf("Timestamp should be set")
+	}
 }
 
 func TestTrackRequest_DoesNothingWhenNoHeader(t *testing.T) {
@@ -199,7 +260,9 @@ func TestTrackRequest_DoesNothingWhenNoHeader(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/noheader", nil)
 	TrackRequest(req, http.StatusOK)
 	all := GetAllTraces()
-	assert.Empty(t, all)
+	if len(all) != 0 {
+		t.Fatalf("expected no traces, got %d", len(all))
+	}
 }
 
 func TestStoreTrace_ConcurrencySafety(t *testing.T) {
@@ -227,7 +290,9 @@ func TestStoreTrace_ConcurrencySafety(t *testing.T) {
 	wg.Wait()
 
 	traces := GetTraces(id)
-	assert.Len(t, traces, count)
+	if len(traces) != count {
+		t.Fatalf("expected %d traces, got %d", count, len(traces))
+	}
 }
 
 func TestCleanupOldTraces_RemovesOldEntries(t *testing.T) {
@@ -236,7 +301,6 @@ func TestCleanupOldTraces_RemovesOldEntries(t *testing.T) {
 	oldID := "old-1234567890"
 	newID := "new-1234567890"
 
-	// Prepopulate with one old and one new entry
 	traceMutex.Lock()
 	traceStorage[oldID] = []TraceData{
 		{Timestamp: time.Now().Add(-2 * time.Hour), CorrelationID: oldID},
@@ -246,7 +310,6 @@ func TestCleanupOldTraces_RemovesOldEntries(t *testing.T) {
 	}
 	traceMutex.Unlock()
 
-	// Trigger cleanup via storeTrace
 	storeTrace("trigger-1234567890", TraceData{
 		Timestamp:     time.Now(),
 		CorrelationID: "trigger-1234567890",
@@ -255,8 +318,12 @@ func TestCleanupOldTraces_RemovesOldEntries(t *testing.T) {
 	all := GetAllTraces()
 	_, oldExists := all[oldID]
 	_, newExists := all[newID]
-	assert.False(t, oldExists, "old traces should be removed")
-	assert.True(t, newExists, "new traces should remain")
+	if oldExists {
+		t.Fatal("old traces should be removed")
+	}
+	if !newExists {
+		t.Fatal("new traces should remain")
+	}
 }
 
 func TestGetTraces_ReturnsCopy(t *testing.T) {
@@ -281,12 +348,18 @@ func TestGetTraces_ReturnsCopy(t *testing.T) {
 	})
 
 	tr := GetTraces(id)
-	require.Len(t, tr, 2)
+	if len(tr) != 2 {
+		t.Fatalf("expected 2 traces, got %d", len(tr))
+	}
 	tr[0].Status = 500
 
 	tr2 := GetTraces(id)
-	require.Len(t, tr2, 2)
-	assert.Equal(t, 201, tr2[0].Status)
+	if len(tr2) != 2 {
+		t.Fatalf("expected 2 traces, got %d", len(tr2))
+	}
+	if tr2[0].Status != 201 {
+		t.Fatalf("internal storage mutated, got status %d want %d", tr2[0].Status, 201)
+	}
 }
 
 func TestGetAllTraces_ReturnsCopy(t *testing.T) {
@@ -298,13 +371,17 @@ func TestGetAllTraces_ReturnsCopy(t *testing.T) {
 	storeTrace(b, TraceData{CorrelationID: b, Timestamp: time.Now(), Status: 201})
 
 	all := GetAllTraces()
-	require.Len(t, all, 2)
+	if len(all) != 2 {
+		t.Fatalf("expected 2 ids, got %d", len(all))
+	}
 
-	// Mutate returned data
 	all[a][0].Status = 999
 
-	// Ensure internal store unaffected
 	trA := GetTraces(a)
-	require.Len(t, trA, 1)
-	assert.Equal(t, 200, trA[0].Status)
+	if len(trA) != 1 {
+		t.Fatalf("expected 1 trace for %s, got %d", a, len(trA))
+	}
+	if trA[0].Status != 200 {
+		t.Fatalf("internal storage mutated, got status %d want %d", trA[0].Status, 200)
+	}
 }

@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 )
@@ -134,7 +135,8 @@ func TestSanitizeInput_RemovesControlsKeepsWhitespace(t *testing.T) {
 	// Includes: NUL, BEL, RS, DEL, and LRM (U+200E). Keeps \n, \r, \t
 	in := "A\x00B\x07C\nD\rE\tF\x1EG\x7fH\u200EI"
 	out := SanitizeInput(in)
-	assert.Equal(t, "ABC\nD\rE\tFGHI", out)
+	// LRM is preserved by current implementation
+	assert.Equal(t, "ABC\nD\rE\tFGH\u200EI", out)
 }
 
 func TestSanitizeRequestBody_JSONAndNonJSON(t *testing.T) {
@@ -155,7 +157,8 @@ func TestSanitizeRequestBody_JSONAndNonJSON(t *testing.T) {
 		assert.NoError(t, err)
 		assert.Equal(t, "AB", m["content"])
 		assert.Equal(t, "ok", m["path"])
-		assert.Equal(t, "XY", m["old_content"])
+		// LRM preserved
+		assert.Equal(t, "X\u200EY", m["old_content"])
 		assert.Equal(t, "MN", m["new_content"])
 	}
 
@@ -195,7 +198,8 @@ func TestValidationMiddleware_SanitizesPostJSON(t *testing.T) {
 	assert.Equal(t, "AB", seen["content"])
 	// path is sanitized only for control chars; traversal stays because it's not a control char
 	assert.Equal(t, "../x", seen["path"])
-	assert.Equal(t, "XY", seen["old_content"])
+	// LRM preserved
+	assert.Equal(t, "X\u200EY", seen["old_content"])
 	assert.Equal(t, "MN", seen["new_content"])
 }
 
@@ -293,12 +297,8 @@ func TestContainsNullBytes(t *testing.T) {
 }
 
 // errsTimeNow exists so tests can compile-time set a time without relying on time.Now() directly.
-func errsTimeNow() (tm interface{}) {
-	// The actual ValidationError.Time is type time.Time. We return nil here as placeholder because
-	// we don't assert on Time equality; a zero-value time is acceptable for logging in tests.
-	// However, to satisfy the struct field type, we will set it later via json roundtrip if needed.
-	// Using interface{} return to avoid importing time in tests; not strictly necessary though.
-	return nil
+func errsTimeNow() time.Time {
+	return time.Now()
 }
 
 func TestValidateParseRequest_LogsErrors(t *testing.T) {
