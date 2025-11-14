@@ -1,3 +1,22 @@
+require 'rack/test'
+require 'json'
+require 'time'
+require 'httparty'
+
+begin
+  require_relative '../app'
+rescue LoadError
+  begin
+    require_relative '../lib/polyglot_api'
+  rescue LoadError
+    begin
+      require 'polyglot_api'
+    rescue LoadError
+      Dir[File.expand_path('../{app,lib}/**/*.rb', __dir__)].each { |f| require f }
+    end
+  end
+end
+
 RSpec.describe PolyglotAPI do
   include Rack::Test::Methods
 
