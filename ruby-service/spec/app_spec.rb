@@ -345,22 +345,19 @@ RSpec.describe PolyglotAPI do
     let(:instance) { described_class.new }
 
     describe '#detect_language' do
-      if instance.respond_to?(:detect_language, true)
-        it 'detects ruby from .rb extension' do
-          expect(instance.send(:detect_language, 'file.rb')).to eq('ruby')
-        end
+      it 'detects ruby from .rb extension' do
+        skip 'detect_language not implemented in PolyglotAPI' unless instance.respond_to?(:detect_language, true)
+        expect(instance.send(:detect_language, 'file.rb')).to eq('ruby')
+      end
 
-        it 'detects python from .py extension' do
-          expect(instance.send(:detect_language, 'file.PY')).to eq('python')
-        end
+      it 'detects python from .py extension (case-insensitive)' do
+        skip 'detect_language not implemented in PolyglotAPI' unless instance.respond_to?(:detect_language, true)
+        expect(instance.send(:detect_language, 'file.PY')).to eq('python')
+      end
 
-        it 'returns unknown for unsupported extension' do
-          expect(instance.send(:detect_language, 'file.unknown')).to eq('unknown')
-        end
-      else
-        it 'is not implemented; skipping' do
-          skip 'detect_language not implemented in PolyglotAPI'
-        end
+      it 'returns unknown for unsupported extension' do
+        skip 'detect_language not implemented in PolyglotAPI' unless instance.respond_to?(:detect_language, true)
+        expect(instance.send(:detect_language, 'file.unknown')).to eq('unknown')
       end
     end
 
