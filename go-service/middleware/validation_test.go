@@ -162,8 +162,10 @@ func TestValidationMiddleware_SanitizesPostBody(t *testing.T) {
 		w.WriteHeader(http.StatusOK)
 	}))
 
-	reqBody := `{"content":"a\x00b\x01c"}`
-	req := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(reqBody))
+	// Use valid JSON with escaped control characters so middleware can unmarshal and sanitize
+	body := map[string]string{"content": "a\x00b\x01c"}
+	raw, _ := json.Marshal(body)
+	req := httptest.NewRequest(http.MethodPost, "/", bytes.NewReader(raw))
 	rr := httptest.NewRecorder()
 	handler.ServeHTTP(rr, req)
 	assert.Equal(t, http.StatusOK, rr.Result().StatusCode)
