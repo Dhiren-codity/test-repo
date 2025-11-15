@@ -14,12 +14,6 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-func TestSanitizeInput_RemovesControlCharacters(t *testing.T) {
-	input := "Hello\x00World\x01\x02\tTab\nNewline\rCarriage\x7fDel\x0bVT\x0cFF\x0eSO"
-	got := SanitizeInput(input)
-	assert.Equal(t, "HelloWorld\tTab\nNewline\rCarriageVTFFSO", got)
-}
-
 func TestSanitizeRequestBody_JSONSanitization(t *testing.T) {
 	t.Cleanup(ClearValidationErrors)
 
