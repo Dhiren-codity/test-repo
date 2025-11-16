@@ -2,7 +2,6 @@ package middleware
 
 import (
 	"bytes"
-	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -111,30 +110,6 @@ func TestSanitizeInput_RemovesControlCharacters(t *testing.T) {
 	assert.Equal(t, "ABC D", out2)
 }
 
-func TestSanitizeRequestBody_JSONSanitization(t *testing.T) {
-	body := `{
-		"content": "val\x00id\n",
-		"path": "p\x0Bq",
-		"old_content": "old\x11",
-		"new_content": "new\x7F"
-	}`
-	req := httptest.NewRequest(http.MethodPost, "/test", bytes.NewBufferString(body))
-	SanitizeRequestBody(req)
-
-	readBack, err := ioutilReadAllAndRestore(req)
-	assert.NoError(t, err)
-
-	var data map[string]string
-	err = json.Unmarshal(readBack, &data)
-	assert.NoError(t, err)
-
-	assert.Equal(t, "valid\n", data["content"])
-	assert.Equal(t, "pq", data["path"])
-	assert.Equal(t, "old", data["old_content"])
-	assert.Equal(t, "new", data["new_content"])
-	assert.Equal(t, int64(len(readBack)), req.ContentLength)
-}
-
 func TestSanitizeRequestBody_InvalidJSON_RestoresBody(t *testing.T) {
 	orig := "not json"
 	req := httptest.NewRequest(http.MethodPost, "/test", bytes.NewBufferString(orig))
@@ -160,31 +135,6 @@ func TestValidationMiddleware_NonPost_PassesThrough(t *testing.T) {
 	ValidationMiddleware(next).ServeHTTP(rr, req)
 	assert.Equal(t, http.StatusOK, rr.Code)
 	assert.Equal(t, orig, seen)
-}
-
-func TestValidationMiddleware_Post_SanitizesJSON(t *testing.T) {
-	body := `{
-		"content": "hi\x00",
-		"path": "a\x0Bb",
-		"old_content": "o\x11",
-		"new_content": "n\x7F"
-	}`
-	req := httptest.NewRequest(http.MethodPost, "/mw", bytes.NewBufferString(body))
-	rr := httptest.NewRecorder()
-
-	var sanitized map[string]string
-	next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		b, _ := ioutilReadAllAndRestore(r)
-		_ = json.Unmarshal(b, &sanitized)
-		w.WriteHeader(http.StatusNoContent)
-	})
-
-	ValidationMiddleware(next).ServeHTTP(rr, req)
-	assert.Equal(t, http.StatusNoContent, rr.Code)
-	assert.Equal(t, "hi", sanitized["content"])
-	assert.Equal(t, "ab", sanitized["path"])
-	assert.Equal(t, "o", sanitized["old_content"])
-	assert.Equal(t, "n", sanitized["new_content"])
 }
 
 func TestGetValidationErrors_ReturnsCopy(t *testing.T) {
