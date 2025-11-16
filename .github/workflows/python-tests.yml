@@ -1,0 +1,35 @@
+# Minimal Python Tests CI
+# Works for any repository structure with Python code
+
+name: Python Tests
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.11'
+
+    - name: Install dependencies and run tests
+      run: |
+        python -m pip install --upgrade pip
+        pip install pytest pytest-cov
+
+        # Install all requirements.txt files found
+        while IFS= read -r -d '' reqfile; do
+          echo "Installing from $reqfile"
+          pip install -r "$reqfile"
+        done < <(find . -name requirements.txt -print0)
+
+        # Run pytest - it will fail if no tests found or tests fail
+        pytest -v

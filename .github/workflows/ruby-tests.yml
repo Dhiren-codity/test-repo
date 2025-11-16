@@ -1,0 +1,33 @@
+# Minimal Ruby Tests CI
+# Works for any repository structure with Gemfile
+
+name: Ruby Tests
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Set up Ruby
+      uses: ruby/setup-ruby@v1
+      with:
+        ruby-version: '3.2'
+
+    - name: Run tests
+      run: |
+        # Find all directories with Gemfile and run tests
+        # Fail the entire job if any test fails
+        failed=0
+        while IFS= read -r -d '' gemfile; do
+          dir=$(dirname "$gemfile")
+          echo "Testing in $dir"
+          (cd "$dir" && bundle install && bundle exec rspec) || failed=1
+        done < <(find . -name Gemfile -print0)
+        exit $failed
