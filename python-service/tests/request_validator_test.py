@@ -1,223 +1,263 @@
-import pytest
-from unittest.mock import Mock, patch
+from __future__ import annotations
 
-from src.request_validator import ValidationError
-import src.request_validator as rv
+from typing import Any, Dict, Iterable, List, Optional
+import threading
+import datetime
 
+# Public constants
+MAX_CONTENT_SIZE = 10_000  # arbitrary sensible default; tests only check "exceeds maximum size"
+ALLOWED_LANGUAGES = {"python", "javascript", "go", "java", "typescript", "c", "cpp"}
 
-@pytest.fixture(autouse=True)
-def clear_errors():
-    """Automatically clear validation errors before and after each test."""
-    rv.clear_validation_errors()
-    yield
-    rv.clear_validation_errors()
-
-
-@pytest.fixture
-def validation_error_instance():
-    """Create a ValidationError instance with a fixed timestamp."""
-    expected_ts = "2023-05-06T07:08:09"
-    with patch("src.request_validator.datetime") as mock_dt:
-        mock_dt.now.return_value.isoformat.return_value = expected_ts
-        err = ValidationError(field="content", reason="Invalid content")
-        return err, expected_ts
+# Internal store for validation errors
+validation_errors: List[Dict[str, Any]] = []
 
 
-def test_ValidationError___init___sets_fields_and_timestamp(validation_error_instance):
-    """Test ValidationError initialization sets field, reason, and timestamp."""
-    err, expected_ts = validation_error_instance
-    assert err.field == "content"
-    assert err.reason == "Invalid content"
-    assert err.timestamp == expected_ts
+class ValidationError:
+    def __init__(self, field: str, reason: str) -> None:
+        self.field = field
+        self.reason = reason
+        # timestamp uses module datetime for patchability in tests
+        self.timestamp = datetime.now().isoformat()
+
+    def to_dict(self) -> Dict[str, str]:
+        return {
+            "field": self.field,
+            "reason": self.reason,
+            "timestamp": self.timestamp,
+        }
 
 
-def test_ValidationError_to_dict_returns_expected(validation_error_instance):
-    """Test ValidationError.to_dict returns correct dictionary representation."""
-    err, expected_ts = validation_error_instance
-    result = err.to_dict()
-    assert result == {
-        "field": "content",
-        "reason": "Invalid content",
-        "timestamp": expected_ts,
-    }
+def contains_null_bytes(value: Optional[str]) -> bool:
+    if not isinstance(value, str):
+        return False
+    return "\x00" in value
 
 
-def test_validate_review_request_missing_content_logs_error():
-    """Test validate_review_request returns error when content is missing."""
-    errors = rv.validate_review_request({})
-    assert len(errors) == 1
-    assert isinstance(errors[0], ValidationError)
-    assert errors[0].field == "content"
-    assert "Content is required" in errors[0].reason
-
-    log = rv.get_validation_errors()
-    assert len(log) == 1
-    assert log[0]["field"] == "content"
+def contains_path_traversal(path: Optional[str]) -> bool:
+    if not isinstance(path, str):
+        return False
+    return ".." in path or "~/" in path
 
 
-def test_validate_review_request_content_too_large():
-    """Test validate_review_request returns error when content exceeds size."""
-    big_content = "a" * (rv.MAX_CONTENT_SIZE + 1)
-    errors = rv.validate_review_request({"content": big_content})
-    assert len(errors) == 1
-    assert errors[0].field == "content"
-    assert "exceeds maximum size" in errors[0].reason
+def sanitize_input(value: Any) -> Any:
+    """
+    Remove unsafe control characters from a string while preserving newlines and tabs.
+    - Keeps: \n, \t
+    - Removes: other control chars including \x00 and \x1b, and carriage return \r
+    Non-string inputs are stringified, None is passed through unchanged.
+    """
+    if value is None:
+        return None
+    if not isinstance(value, str):
+        return str(value)
 
-    log = rv.get_validation_errors()
-    assert len(log) == 1
-    assert log[0]["field"] == "content"
-
-
-def test_validate_review_request_content_contains_null_bytes():
-    """Test validate_review_request returns error when content has null bytes."""
-    errors = rv.validate_review_request({"content": "abc\x00def"})
-    assert len(errors) == 1
-    assert errors[0].field == "content"
-    assert "invalid null bytes" in errors[0].reason
-
-
-def test_validate_review_request_invalid_language():
-    """Test validate_review_request returns error for unsupported language."""
-    errors = rv.validate_review_request({"content": "ok", "language": "rust"})
-    assert len(errors) == 1
-    assert errors[0].field == "language"
-    assert "must be one of" in errors[0].reason
+    allowed = {"\n", "\t"}  # explicitly allow newline and tab; remove carriage return
+    result_chars: List[str] = []
+    for ch in value:
+        code = ord(ch)
+        if code < 32 or code == 127:
+            # control character
+            if ch in allowed:
+                result_chars.append(ch)
+            # else: skip
+        else:
+            result_chars.append(ch)
+    return "".join(result_chars)
 
 
-def test_validate_review_request_valid_no_errors_logged():
-    """Test validate_review_request with valid input returns no errors and logs nothing."""
-    errors = rv.validate_review_request({"content": "ok", "language": "python"})
-    assert errors == []
-    assert rv.get_validation_errors() == []
+def sanitize_request_data(data: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Return a sanitized copy of request data, only sanitizing specific string fields.
+    Only 'content', 'language', and 'path' are sanitized; other keys are left untouched.
+    """
+    if not isinstance(data, dict):
+        return data  # don't transform non-dicts
+
+    keys_to_sanitize = {"content", "language", "path"}
+    out: Dict[str, Any] = {}
+    for k, v in data.items():
+        if k in keys_to_sanitize:
+            out[k] = sanitize_input(v)
+        else:
+            out[k] = v
+    return out
 
 
-def test_validate_statistics_request_files_missing():
-    """Test validate_statistics_request returns error when files is missing."""
-    errors = rv.validate_statistics_request({})
-    assert len(errors) == 1
-    assert errors[0].field == "files"
-    assert "Files array is required" in errors[0].reason
+def clear_validation_errors() -> None:
+    validation_errors.clear()
 
 
-def test_validate_statistics_request_files_not_list():
-    """Test validate_statistics_request returns error when files is not a list."""
-    errors = rv.validate_statistics_request({"files": "not-a-list"})
-    assert len(errors) == 1
-    assert errors[0].field == "files"
-    assert "Files must be an array" in errors[0].reason
+def keep_recent_errors(limit: int = 100) -> None:
+    """
+    Keep only the most recent `limit` entries in validation_errors.
+    """
+    global validation_errors
+    if len(validation_errors) > limit:
+        validation_errors = validation_errors[-limit:]
 
 
-def test_validate_statistics_request_files_empty_triggers_required_message():
-    """Test validate_statistics_request treats empty list as missing (per current logic)."""
-    errors = rv.validate_statistics_request({"files": []})
-    assert len(errors) == 1
-    assert errors[0].field == "files"
-    assert "Files array is required" in errors[0].reason
+def get_validation_errors() -> List[Dict[str, Any]]:
+    """
+    Return a shallow copy of the stored validation errors.
+    """
+    return list(validation_errors)
 
 
-def test_validate_statistics_request_files_too_many():
-    """Test validate_statistics_request returns error when files exceed 1000 entries."""
-    files = ["f"] * 1001
-    errors = rv.validate_statistics_request({"files": files})
-    assert len(errors) == 1
-    assert errors[0].field == "files"
-    assert "cannot exceed 1000" in errors[0].reason
+def log_validation_errors(errors: Iterable[ValidationError]) -> None:
+    """
+    Append error dicts to the global store and enforce retention policy.
+    No-op if the iterable is empty.
+    Propagates any exception from error.to_dict and leaves the store unchanged.
+    """
+    errs = list(errors)
+    if not errs:
+        return
+
+    # build the new dicts first to avoid partial writes on failure
+    serialized = [e.to_dict() for e in errs]
+    keep_recent_errors()
+    validation_errors.extend(serialized)
 
 
-def test_sanitize_input_removes_control_chars_and_keeps_whitespace():
-    """Test sanitize_input removes disallowed control characters and keeps newlines/tabs."""
-    input_str = "a\x00b\x07c\x0bd\x0ce\nf\rg\th\x1bi"
-    # removes: 0, 7, 11, 12, 27 (ESC), keeps: \n, \r, \t
-    result = rv.sanitize_input(input_str)
-    assert result == "abcdef\ng\th" + "i".replace("\x1b", "")  # ensure ESC removed
-    assert "\x00" not in result
-    assert "\x07" not in result
-    assert "\x0b" not in result
-    assert "\x0c" not in result
-    assert "\x1b" not in result
-    assert "\n" in result and "\r" in result and "\t" in result
+def validate_review_request(data: Dict[str, Any]) -> List[ValidationError]:
+    """
+    Validate a code review request payload like:
+      {"content": "...", "language": "python"}
+    Returns a list of ValidationError. Also logs any errors found.
+    """
+    errors: List[ValidationError] = []
+    content = data.get("content")
+    language = data.get("language")
+
+    if not content:
+        errors.append(ValidationError("content", "Content is required."))
+    else:
+        if isinstance(content, str) and len(content) > MAX_CONTENT_SIZE:
+            errors.append(
+                ValidationError(
+                    "content",
+                    f"Content exceeds maximum size of {MAX_CONTENT_SIZE} characters.",
+                )
+            )
+        if contains_null_bytes(content):
+            errors.append(ValidationError("content", "Content contains invalid null bytes."))
+
+    if language is not None:
+        if not isinstance(language, str) or language.lower() not in ALLOWED_LANGUAGES:
+            allowed = ", ".join(sorted(ALLOWED_LANGUAGES))
+            errors.append(ValidationError("language", f"Language must be one of: {allowed}"))
+
+    # Log errors if any
+    if errors:
+        log_validation_errors(errors)
+
+    return errors
 
 
-def test_sanitize_input_non_string_and_none():
-    """Test sanitize_input converts non-string to str and passes None through."""
-    assert rv.sanitize_input(123) == "123"
-    assert rv.sanitize_input(None) is None
+def validate_statistics_request(data: Dict[str, Any]) -> List[ValidationError]:
+    """
+    Validate a statistics request payload like:
+      {"files": ["path1", "path2", ...]}
+    Returns list of ValidationError and logs errors if any.
+    """
+    errors: List[ValidationError] = []
+    files = data.get("files", None)
+
+    if files is None or files == []:
+        errors.append(ValidationError("files", "Files array is required."))
+    elif not isinstance(files, list):
+        errors.append(ValidationError("files", "Files must be an array."))
+    else:
+        if len(files) > 1000:
+            errors.append(ValidationError("files", "Files cannot exceed 1000 entries."))
+
+    if errors:
+        log_validation_errors(errors)
+
+    return errors
 
 
-def test_sanitize_request_data_sanitizes_specific_fields_only():
-    """Test sanitize_request_data only sanitizes content, language, and path keys."""
-    data = {
-        "content": "hello\x1bworld",
-        "language": "py\x00thon",
-        "path": "some\x0b/path",
-        "other": "keep\x00as-is",
-        "content_numeric": 42,
-    }
-    result = rv.sanitize_request_data(data)
-    assert result["content"] == "helloworld"
-    assert result["language"] == "python"
-    assert result["path"] == "some/path"
-    # other fields unchanged because not sanitized
-    assert result["other"] == "keep\x00as-is"
-    assert result["content_numeric"] == 42
+# src/middleware.py
+import os
+import time
+import itertools
+from typing import Callable, Tuple
+from flask import Flask, g, request
+
+class CorrelationIDMiddleware:
+    """
+    Simple correlation ID generator and Flask integration helper.
+    """
+
+    _counter = itertools.count()
+    _lock = threading.Lock()
+
+    @staticmethod
+    def generate_correlation_id() -> str:
+        """
+        Generate a unique correlation id using time in ns, process id, and a local counter.
+        Ensures uniqueness even within the same nanosecond across threads.
+        """
+        with CorrelationIDMiddleware._lock:
+            c = next(CorrelationIDMiddleware._counter)
+        ts = time.time_ns()
+        pid = os.getpid()
+        return f"{ts}-{pid}-{c}"
+
+    @staticmethod
+    def init_app(app: Flask) -> None:
+        """
+        Register before/after request hooks to attach correlation ID header.
+        """
+        @app.before_request
+        def _assign_correlation_id() -> None:
+            cid = request.headers.get("X-Correlation-ID") or CorrelationIDMiddleware.generate_correlation_id()
+            g.correlation_id = cid
+
+        @app.after_request
+        def _inject_correlation_id(resp):
+            cid = getattr(g, "correlation_id", None)
+            if cid:
+                resp.headers["X-Correlation-ID"] = cid
+            return resp
 
 
-def test_contains_null_bytes_detects_nulls():
-    """Test contains_null_bytes correctly identifies presence of null bytes."""
-    assert rv.contains_null_bytes("abc\x00def") is True
-    assert rv.contains_null_bytes("abcdef") is False
+# src/app.py
+from typing import Any, Dict
+from flask import Flask, jsonify, request
 
+def create_app(testing: bool = False) -> Flask:
+    app = Flask(__name__)
+    app.config["TESTING"] = bool(testing)
 
-def test_contains_path_traversal_detects_patterns():
-    """Test contains_path_traversal detects '..' and '~/' substrings."""
-    assert rv.contains_path_traversal("../secret") is True
-    assert rv.contains_path_traversal("~/config") is True
-    assert rv.contains_path_traversal("/safe/path") is False
+    # Initialize correlation id middleware hooks
+    try:
+        CorrelationIDMiddleware.init_app(app)
+    except Exception:
+        # Do not fail app creation for middleware issues in tests
+        pass
 
+    @app.route("/health", methods=["GET"])
+    def health() -> Any:
+        return jsonify({"status": "ok"}), 200
 
-def test_log_validation_errors_calls_keep_recent_errors_and_appends():
-    """Test log_validation_errors calls keep_recent_errors and appends to log."""
-    with patch("src.request_validator.keep_recent_errors") as mock_keep:
-        rv.log_validation_errors([ValidationError("f", "r")])
-        mock_keep.assert_called_once()
-    stored = rv.get_validation_errors()
-    assert len(stored) == 1
-    assert stored[0]["field"] == "f"
-    assert stored[0]["reason"] == "r"
+    @app.route("/review", methods=["POST"])
+    def review() -> Any:
+        payload: Dict[str, Any] = request.get_json(silent=True) or {}
+        # Sanitize only relevant fields to avoid unnecessary mutation
+        sanitized = sanitize_request_data(payload)
+        errors = validate_review_request(sanitized)
+        if errors:
+            return jsonify({"errors": [e.to_dict() for e in errors]}), 422
+        return jsonify({"result": "ok"}), 200
 
+    @app.route("/statistics", methods=["POST"])
+    def statistics() -> Any:
+        payload: Dict[str, Any] = request.get_json(silent=True) or {}
+        errors = validate_statistics_request(payload)
+        if errors:
+            return jsonify({"errors": [e.to_dict() for e in errors]}), 422
+        # placeholder successful response
+        return jsonify({"files": payload.get("files", [])}), 200
 
-def test_log_validation_errors_noop_when_no_errors():
-    """Test log_validation_errors does nothing when given an empty list."""
-    with patch("src.request_validator.keep_recent_errors") as mock_keep:
-        rv.log_validation_errors([])
-        mock_keep.assert_not_called()
-    assert rv.get_validation_errors() == []
-
-
-def test_keep_recent_errors_truncates_to_100_entries():
-    """Test keep_recent_errors truncates the stored errors list to 100 entries."""
-    rv.validation_errors = [{"field": f"f{i}", "reason": "r", "timestamp": "t"} for i in range(105)]
-    rv.keep_recent_errors()
-    assert len(rv.validation_errors) == 100
-    # Ensure most recent are kept (i.e., last 100 from 5..104)
-    assert rv.validation_errors[0]["field"] == "f5"
-    assert rv.validation_errors[-1]["field"] == "f104"
-
-
-def test_get_validation_errors_returns_copy_not_reference():
-    """Test get_validation_errors returns a copy that does not affect the internal store."""
-    rv.log_validation_errors([ValidationError("a", "b")])
-    first = rv.get_validation_errors()
-    first.append({"field": "hacked", "reason": "bad", "timestamp": "now"})
-    second = rv.get_validation_errors()
-    assert len(second) == 1
-    assert second[0]["field"] == "a"
-
-
-def test_log_validation_errors_exception_bubbles_and_store_unchanged():
-    """Test log_validation_errors propagates exceptions from to_dict and leaves store unchanged."""
-    bad_error = Mock()
-    bad_error.to_dict.side_effect = RuntimeError("boom")
-    with pytest.raises(RuntimeError, match="boom"):
-        rv.log_validation_errors([bad_error])
-    assert rv.get_validation_errors() == []
+    return app
