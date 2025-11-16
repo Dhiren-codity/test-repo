@@ -1,0 +1,33 @@
+# Minimal Go Tests CI
+# Works for any repository structure with go.mod at root or in subdirectories
+
+name: Go Tests
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Set up Go
+      uses: actions/setup-go@v5
+      with:
+        go-version: '1.21'
+
+    - name: Run tests
+      run: |
+        # Find all directories with go.mod and run tests
+        # Fail the entire job if any test fails
+        failed=0
+        while IFS= read -r -d '' gomod; do
+          dir=$(dirname "$gomod")
+          echo "Testing in $dir"
+          (cd "$dir" && go mod download && go test -v ./...) || failed=1
+        done < <(find . -name go.mod -print0)
+        exit $failed
