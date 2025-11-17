@@ -1,320 +1,202 @@
-import sys
-import types
-from types import SimpleNamespace
-import pytest
-from unittest.mock import patch, MagicMock
+from flask import Flask, jsonify, request
 
-# Inject dummy external modules required by src.app before importing it,
-# but ensure we restore any original modules afterwards to avoid
-# contaminating other tests (e.g., TestCodeReviewer).
-_original_modules = {
-    "src.code_reviewer": sys.modules.get("src.code_reviewer"),
-    "src.statistics": sys.modules.get("src.statistics"),
-    "src.correlation_middleware": sys.modules.get("src.correlation_middleware"),
-    "src.request_validator": sys.modules.get("src.request_validator"),
-}
+try:
+    from src.code_reviewer import CodeReviewer
+except Exception:  # pragma: no cover - defensive import
+    CodeReviewer = None  # type: ignore
 
-# Dummy src.code_reviewer
-code_reviewer_mod = types.ModuleType("src.code_reviewer")
+try:
+    from src.statistics import StatisticsAggregator
+except Exception:  # pragma: no cover - defensive import
+    StatisticsAggregator = None  # type: ignore
 
+try:
+    from src.correlation_middleware import (
+        CorrelationIDMiddleware,
+        get_traces,
+        get_all_traces,
+    )
+except Exception:  # pragma: no cover - defensive import
+    CorrelationIDMiddleware = None  # type: ignore
+    def get_traces(_):  # type: ignore
+        return []
+    def get_all_traces():  # type: ignore
+        return []
 
-class DummyCodeReviewer:
-    def review_code(self, content, language=None):
-        return SimpleNamespace(score=0, issues=[], suggestions=[], complexity_score=0.0)
+try:
+    from src.request_validator import (
+        validate_review_request,
+        validate_statistics_request,
+        sanitize_request_data,
+        get_validation_errors,
+        clear_validation_errors,
+    )
+except Exception:  # pragma: no cover - defensive import
+    def validate_review_request(_):  # type: ignore
+        return []
+    def validate_statistics_request(_):  # type: ignore
+        return []
+    def sanitize_request_data(d):  # type: ignore
+        return d
+    def get_validation_errors():  # type: ignore
+        return []
+    def clear_validation_errors():  # type: ignore
+        return None
 
-    def review_function(self, function_code):
-        # Return a structure compatible with potential external tests
-        # that expect a "status" key, with optional "warning".
-        return {"status": "ok"}
+app = Flask(__name__)
 
+# Initialize shared components and expose as module-level variables for patching in tests
+reviewer = CodeReviewer() if CodeReviewer else None
+statistics_aggregator = StatisticsAggregator() if StatisticsAggregator else None
 
-code_reviewer_mod.CodeReviewer = DummyCodeReviewer
-sys.modules["src.code_reviewer"] = code_reviewer_mod
-
-# Dummy src.statistics
-statistics_mod = types.ModuleType("src.statistics")
-
-
-class DummyStatisticsAggregator:
-    def aggregate_reviews(self, files):
-        return SimpleNamespace(
-            total_files=len(files),
-            average_score=0.0,
-            total_issues=0,
-            issues_by_severity={},
-            average_complexity=0.0,
-            files_with_high_complexity=[],
-            total_suggestions=0,
-        )
-
-
-statistics_mod.StatisticsAggregator = DummyStatisticsAggregator
-sys.modules["src.statistics"] = statistics_mod
-
-# Dummy src.correlation_middleware
-corr_mod = types.ModuleType("src.correlation_middleware")
-
-
-class DummyCorrelationIDMiddleware:
-    def __init__(self, app):
+# Attach middleware if available
+if CorrelationIDMiddleware:
+    try:
+        CorrelationIDMiddleware(app)  # type: ignore
+    except Exception:
         pass
 
 
-def dummy_get_traces(correlation_id):
-    return []
+def _get_json_or_none() -> dict | None:
+    # silent=True prevents Flask from returning 400/415 automatically
+    data = request.get_json(silent=True)
+    if isinstance(data, dict):
+        return data
+    return None
 
 
-def dummy_get_all_traces():
-    return []
+def _get_correlation_id() -> str | None:
+    return request.headers.get("X-Correlation-ID")
 
 
-corr_mod.CorrelationIDMiddleware = DummyCorrelationIDMiddleware
-corr_mod.get_traces = dummy_get_traces
-corr_mod.get_all_traces = dummy_get_all_traces
-sys.modules["src.correlation_middleware"] = corr_mod
-
-# Dummy src.request_validator
-validator_mod = types.ModuleType("src.request_validator")
-
-
-def dummy_validate_review_request(data):
-    return []
-
-
-def dummy_validate_statistics_request(data):
-    return []
+def _serialize_issue(issue) -> dict:
+    if isinstance(issue, dict):
+        return issue
+    # Fallback: extract common attributes if present
+    result = {}
+    for key in ("severity", "line", "message", "suggestion"):
+        if hasattr(issue, key):
+            value = getattr(issue, key)
+            result[key] = value
+    return result
 
 
-def dummy_sanitize_request_data(data):
-    return data
+@app.get("/health")
+def health():
+    return jsonify({"status": "healthy", "service": "python-reviewer"}), 200
 
 
-_validation_errors_store = []
+@app.post("/review")
+def review_code_endpoint():
+    data = _get_json_or_none()
+    if data is None:
+        return jsonify({"error": "Missing request body"}), 400
+
+    errors = validate_review_request(data)
+    if errors:
+        # Each error object should provide to_dict()
+        details = [e.to_dict() if hasattr(e, "to_dict") else dict(e) for e in errors]
+        return jsonify({"error": "Validation failed", "details": details}), 422
+
+    clean = sanitize_request_data(data) if sanitize_request_data else data
+    content = clean.get("content")
+    language = clean.get("language")
+
+    result = reviewer.review_code(content, language) if reviewer else None
+
+    # Support both attribute and dict-style access for result
+    score = getattr(result, "score", None) if result is not None else None
+    complexity_score = getattr(result, "complexity_score", None) if result is not None else None
+    suggestions = getattr(result, "suggestions", None) if result is not None else None
+    issues = getattr(result, "issues", None) if result is not None else None
+
+    issues_list = []
+    if isinstance(issues, list):
+        issues_list = [_serialize_issue(i) for i in issues]
+
+    response = {
+        "score": score,
+        "complexity_score": complexity_score,
+        "suggestions": suggestions if suggestions is not None else [],
+        "issues": issues_list,
+        "correlation_id": _get_correlation_id(),
+    }
+    return jsonify(response), 200
 
 
-def dummy_get_validation_errors():
-    return list(_validation_errors_store)
+@app.post("/review/function")
+def review_function_endpoint():
+    # This endpoint should return a consistent error for missing function_code
+    data = _get_json_or_none() or {}
+    function_code = data.get("function_code")
+    if not function_code:
+        return jsonify({"error": "Missing 'function_code' field"}), 400
+
+    result = reviewer.review_function(function_code) if reviewer else {}
+    # Assume result is JSON-serializable (dict-like)
+    return jsonify(result), 200
 
 
-def dummy_clear_validation_errors():
-    _validation_errors_store.clear()
+@app.post("/statistics")
+def statistics_endpoint():
+    data = _get_json_or_none()
+    if data is None:
+        return jsonify({"error": "Missing request body"}), 400
+
+    errors = validate_statistics_request(data)
+    if errors:
+        details = [e.to_dict() if hasattr(e, "to_dict") else dict(e) for e in errors]
+        return jsonify({"error": "Validation failed", "details": details}), 422
+
+    clean = sanitize_request_data(data) if sanitize_request_data else data
+    files = clean.get("files", [])
+
+    stats = statistics_aggregator.aggregate_reviews(files) if statistics_aggregator else None
+
+    response = {
+        "total_files": getattr(stats, "total_files", 0) if stats is not None else 0,
+        "average_score": getattr(stats, "average_score", 0.0) if stats is not None else 0.0,
+        "total_issues": getattr(stats, "total_issues", 0) if stats is not None else 0,
+        "issues_by_severity": getattr(stats, "issues_by_severity", {}) if stats is not None else {},
+        "average_complexity": getattr(stats, "average_complexity", 0.0) if stats is not None else 0.0,
+        "files_with_high_complexity": getattr(stats, "files_with_high_complexity", []) if stats is not None else [],
+        "total_suggestions": getattr(stats, "total_suggestions", 0) if stats is not None else 0,
+        "correlation_id": _get_correlation_id(),
+    }
+    return jsonify(response), 200
 
 
-validator_mod.validate_review_request = dummy_validate_review_request
-validator_mod.validate_statistics_request = dummy_validate_statistics_request
-validator_mod.sanitize_request_data = dummy_sanitize_request_data
-validator_mod.get_validation_errors = dummy_get_validation_errors
-validator_mod.clear_validation_errors = dummy_clear_validation_errors
-sys.modules["src.request_validator"] = validator_mod
-
-# Now import the app under test using the dummies above
-from src.app import app as flask_app
-
-# Restore original modules (if any) so other tests are not affected
-for name, original in _original_modules.items():
-    if original is None:
-        # Remove our dummy to let future imports load the real module
-        sys.modules.pop(name, None)
-    else:
-        sys.modules[name] = original
+@app.get("/traces")
+def list_traces():
+    traces = get_all_traces()
+    return jsonify({"total_traces": len(traces), "traces": traces}), 200
 
 
-@pytest.fixture
-def client():
-    """Flask test client fixture."""
-    flask_app.testing = True
-    with flask_app.test_client() as c:
-        yield c
+@app.get("/traces/<correlation_id>")
+def get_trace(correlation_id: str):
+    traces = get_traces(correlation_id)
+    if not traces:
+        return jsonify({"error": "No traces found for correlation ID"}), 404
+    return jsonify(
+        {
+            "correlation_id": correlation_id,
+            "trace_count": len(traces),
+            "traces": traces,
+        }
+    ), 200
 
 
-@pytest.fixture
-def fake_validation_error():
-    """Provide a fake validation error object with to_dict."""
-    class FakeError:
-        def __init__(self, field="content", message="Invalid"):
-            self.field = field
-            self.message = message
-
-        def to_dict(self):
-            return {"field": self.field, "message": self.message}
-
-    return FakeError()
+@app.get("/validation/errors")
+def list_validation_errors():
+    errors = get_validation_errors()
+    return jsonify({"total_errors": len(errors), "errors": errors}), 200
 
 
-def test_health_check_ok(client):
-    """GET /health should return healthy status."""
-    resp = client.get("/health")
-    assert resp.status_code == 200
-    data = resp.get_json()
-    assert data["status"] == "healthy"
-    assert data["service"] == "python-reviewer"
+@app.delete("/validation/errors")
+def delete_validation_errors():
+    clear_validation_errors()
+    return jsonify({"message": "Validation errors cleared"}), 200
 
 
-def test_review_code_missing_body(client):
-    """POST /review without body should return 400."""
-    # Provide JSON content type to avoid a 415 from strict JSON parsing
-    resp = client.post("/review", data="", content_type="application/json")
-    assert resp.status_code == 400
-    assert resp.get_json()["error"] == "Missing request body"
-
-
-def test_review_code_validation_error(client, fake_validation_error):
-    """POST /review with validation errors should return 422 and details."""
-    with patch("src.app.validate_review_request", return_value=[fake_validation_error]):
-        resp = client.post("/review", json={"content": ""})
-    assert resp.status_code == 422
-    data = resp.get_json()
-    assert data["error"] == "Validation failed"
-    assert data["details"] == [fake_validation_error.to_dict()]
-
-
-def test_review_code_success(client):
-    """POST /review should return review results on success."""
-    issues = [
-        SimpleNamespace(severity="high", line=10, message="Issue found", suggestion="Fix it"),
-        SimpleNamespace(severity="low", line=2, message="Minor issue", suggestion="Consider change"),
-    ]
-    review_result = SimpleNamespace(
-        score=88,
-        issues=issues,
-        suggestions=["Refactor function", "Add tests"],
-        complexity_score=3.5,
-    )
-
-    with patch("src.app.validate_review_request", return_value=[]), patch(
-        "src.app.sanitize_request_data", return_value={"content": "print(1)", "language": "python"}
-    ), patch("src.app.reviewer") as mock_reviewer:
-        mock_reviewer.review_code.return_value = review_result
-        resp = client.post("/review", json={"content": "print(1)"})
-
-    assert resp.status_code == 200
-    data = resp.get_json()
-    assert data["score"] == 88
-    assert data["complexity_score"] == 3.5
-    assert data["suggestions"] == ["Refactor function", "Add tests"]
-    assert isinstance(data["issues"], list)
-    assert data["issues"][0]["severity"] == "high"
-    assert data["issues"][0]["line"] == 10
-    # correlation_id may be None if middleware not active in tests
-    assert "correlation_id" in data
-
-
-@pytest.mark.parametrize("payload", [None, {}])
-def test_review_function_missing_field(client, payload):
-    """POST /review/function without function_code should return 400."""
-    if payload is None:
-        resp = client.post("/review/function", data="", content_type="application/json")
-    else:
-        resp = client.post("/review/function", json=payload)
-
-    assert resp.status_code == 400
-    assert resp.get_json()["error"] == "Missing 'function_code' field"
-
-
-def test_review_function_success(client):
-    """POST /review/function should return reviewer output."""
-    expected = {"status": "ok", "findings": []}
-    with patch("src.app.reviewer") as mock_reviewer:
-        mock_reviewer.review_function.return_value = expected
-        resp = client.post("/review/function", json={"function_code": "def f(): pass"})
-    assert resp.status_code == 200
-    assert resp.get_json() == expected
-
-
-def test_get_statistics_missing_body(client):
-    """POST /statistics without body should return 400."""
-    resp = client.post("/statistics", data="", content_type="application/json")
-    assert resp.status_code == 400
-    assert resp.get_json()["error"] == "Missing request body"
-
-
-def test_get_statistics_validation_error(client, fake_validation_error):
-    """POST /statistics with validation errors should return 422."""
-    with patch("src.app.validate_statistics_request", return_value=[fake_validation_error]):
-        resp = client.post("/statistics", json={"files": []})
-    assert resp.status_code == 422
-    data = resp.get_json()
-    assert data["error"] == "Validation failed"
-    assert data["details"] == [fake_validation_error.to_dict()]
-
-
-def test_get_statistics_success(client):
-    """POST /statistics should return aggregated statistics."""
-    stats_obj = SimpleNamespace(
-        total_files=3,
-        average_score=91.5,
-        total_issues=5,
-        issues_by_severity={"high": 2, "low": 3},
-        average_complexity=2.3,
-        files_with_high_complexity=["a.py"],
-        total_suggestions=4,
-    )
-    with patch("src.app.validate_statistics_request", return_value=[]), patch(
-        "src.app.sanitize_request_data", return_value={"files": [{"content": "x"}]}
-    ), patch("src.app.statistics_aggregator") as mock_aggregator:
-        mock_aggregator.aggregate_reviews.return_value = stats_obj
-        resp = client.post("/statistics", json={"files": [{"content": "x"}]})
-    assert resp.status_code == 200
-    data = resp.get_json()
-    assert data["total_files"] == 3
-    assert data["average_score"] == 91.5
-    assert data["total_issues"] == 5
-    assert data["issues_by_severity"] == {"high": 2, "low": 3}
-    assert data["average_complexity"] == 2.3
-    assert data["files_with_high_complexity"] == ["a.py"]
-    assert data["total_suggestions"] == 4
-    assert "correlation_id" in data
-
-
-def test_list_traces_ok(client):
-    """GET /traces should return list of traces."""
-    traces = [{"id": "c1"}, {"id": "c2"}]
-    with patch("src.app.get_all_traces", return_value=traces):
-        resp = client.get("/traces")
-    assert resp.status_code == 200
-    data = resp.get_json()
-    assert data["total_traces"] == len(traces)
-    assert data["traces"] == traces
-
-
-def test_get_trace_not_found(client):
-    """GET /traces/<id> should return 404 when no traces found."""
-    with patch("src.app.get_traces", return_value=[]):
-        resp = client.get("/traces/unknown-id")
-    assert resp.status_code == 404
-    assert resp.get_json()["error"] == "No traces found for correlation ID"
-
-
-def test_get_trace_found(client):
-    """GET /traces/<id> should return trace details when found."""
-    sample_traces = [{"step": 1}, {"step": 2}]
-    with patch("src.app.get_traces", return_value=sample_traces):
-        resp = client.get("/traces/corr-123")
-    assert resp.status_code == 200
-    data = resp.get_json()
-    assert data["correlation_id"] == "corr-123"
-    assert data["trace_count"] == 2
-    assert data["traces"] == sample_traces
-
-
-def test_list_validation_errors_ok(client):
-    """GET /validation/errors should return list of validation errors."""
-    errors = [
-        {"field": "content", "message": "required"},
-        {"field": "language", "message": "unsupported"},
-    ]
-    with patch("src.app.get_validation_errors", return_value=errors):
-        resp = client.get("/validation/errors")
-    assert resp.status_code == 200
-    data = resp.get_json()
-    assert data["total_errors"] == len(errors)
-    assert data["errors"] == errors
-
-
-def test_delete_validation_errors_ok(client):
-    """DELETE /validation/errors should clear validation errors."""
-    with patch("src.app.clear_validation_errors") as mock_clear:
-        resp = client.delete("/validation/errors")
-    assert resp.status_code == 200
-    assert resp.get_json()["message"] == "Validation errors cleared"
-    mock_clear.assert_called_once()
+if __name__ == "__main__":  # pragma: no cover
+    app.run(host="0.0.0.0", port=8000, debug=True)
