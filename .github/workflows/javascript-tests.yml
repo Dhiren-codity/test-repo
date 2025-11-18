@@ -1,0 +1,33 @@
+# Minimal JavaScript/TypeScript Tests CI
+# Works for any repository structure with package.json
+
+name: JavaScript Tests
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Set up Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: '20'
+
+    - name: Run tests
+      run: |
+        # Find all directories with package.json and run tests
+        # Fail the entire job if any test fails
+        failed=0
+        while IFS= read -r -d '' pkgjson; do
+          dir=$(dirname "$pkgjson")
+          echo "Testing in $dir"
+          (cd "$dir" && npm install && npm test) || failed=1
+        done < <(find . -name package.json -not -path "*/node_modules/*" -print0)
+        exit $failed
