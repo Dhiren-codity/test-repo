@@ -1,14 +1,15 @@
 # Polyglot Codebase - Multi-Language Code Review System
 
-A sophisticated multi-language microservices application built with **Go**, **Python**, and **Ruby** that provides comprehensive code analysis, review, and metrics calculation.
+A sophisticated multi-language microservices application built with **Go**, **Python**, **Ruby**, and **TypeScript** that provides comprehensive code analysis, review, and metrics calculation.
 
 ## Architecture
 
-This project consists of three microservices:
+This project consists of four microservices:
 
 1. **Go Service** (`go-service/`) - Fast code parsing, diff analysis, and metrics calculation
 2. **Python Service** (`python-service/`) - AI-powered code review with pattern detection and quality scoring
 3. **Ruby Service** (`ruby-service/`) - Web API aggregator that orchestrates the other services
+4. **JS/TS Service** (`js-service/`) - API Gateway with request routing, rate limiting, and service health monitoring
 
 ## Features
 
@@ -37,6 +38,10 @@ polyglot-codebase/
 │   ├── app/            # Application code
 │   ├── spec/           # RSpec tests
 │   └── Gemfile
+├── js-service/          # TypeScript API Gateway
+│   ├── src/            # TypeScript source code
+│   ├── package.json    # Node.js dependencies
+│   └── tsconfig.json   # TypeScript configuration
 ├── .github/workflows/   # CI/CD pipelines
 └── docker-compose.yml   # Docker orchestration
 ```
@@ -48,6 +53,7 @@ polyglot-codebase/
 - Go 1.21+
 - Python 3.10+
 - Ruby 3.2+
+- Node.js 20+ and npm
 - Docker and Docker Compose (optional)
 
 ### Local Development
@@ -105,6 +111,15 @@ docker-compose up --build
 - `POST /analyze` - Full code analysis (aggregates Go + Python)
 - `POST /diff` - Diff analysis with review
 - `POST /metrics` - Metrics with quality score
+
+### JS/TS API Gateway (Port 8083)
+
+- `GET /` - API Gateway information and available endpoints
+- `GET /health/health` - Gateway health check
+- `GET /health/status` - Status of all microservices
+- `GET /api/go/*` - Proxy requests to Go service
+- `GET /api/python/*` - Proxy requests to Python service
+- `GET /api/ruby/*` - Proxy requests to Ruby service
 
 ## Example Usage
 
@@ -176,6 +191,7 @@ bundle exec rspec spec/
 - **Go**: Follow standard Go conventions, use `golangci-lint`
 - **Python**: Follow PEP 8, use `black` for formatting
 - **Ruby**: Follow Ruby style guide, use `rubocop`
+- **TypeScript**: Follow TypeScript best practices, use `eslint` for linting
 
 ## License
 

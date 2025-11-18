@@ -39,6 +39,25 @@ services:
     networks:
       - polyglot-network
 
+  js-service:
+    build:
+      context: ./js-service
+      dockerfile: Dockerfile
+    ports:
+      - "8083:8083"
+    environment:
+      - PORT=8083
+      - NODE_ENV=production
+      - GO_SERVICE_URL=http://go-service:8080
+      - PYTHON_SERVICE_URL=http://python-service:8081
+      - RUBY_SERVICE_URL=http://ruby-service:8082
+    depends_on:
+      - go-service
+      - python-service
+      - ruby-service
+    networks:
+      - polyglot-network
+
 networks:
   polyglot-network:
     driver: bridge
