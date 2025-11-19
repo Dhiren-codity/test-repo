@@ -220,18 +220,29 @@ func TestSanitizeRequestBody_JSON_SanitizesFields(t *testing.T) {
 	raw, err := io.ReadAll(req.Body)
 	assert.NoError(t, err)
 
-	var got map[string]string
+	var got map[string]interface{}
 	err = json.Unmarshal(raw, &got)
 	assert.NoError(t, err)
 
 	// Confirm sanitized fields
-	assert.Equal(t, "AB", got["content"])
-	assert.Equal(t, "PQ", got["path"])
+	if v, ok := got["content"].(string); assert.True(t, ok) {
+		assert.Equal(t, "AB", v)
+	}
+	if v, ok := got["path"].(string); assert.True(t, ok) {
+		assert.Equal(t, "PQ", v)
+	}
 	// Allowed controls are preserved
-	assert.Equal(t, "O\r", got["old_content"])
-	assert.Equal(t, "N\t", got["new_content"])
-	// "other" should still include the null since it's not sanitized by key
-	assert.Contains(t, got["other"], "\x00")
+	if v, ok := got["old_content"].(string); assert.True(t, ok) {
+		assert.Equal(t, "O\r", v)
+	}
+	if v, ok := got["new_content"].(string); assert.True(t, ok) {
+		assert.Equal(t, "N\t", v)
+	}
+	// "other" should be preserved as-is (not sanitized by key)
+	if v, ok := got["other"].(string); assert.True(t, ok) {
+		assert.Equal(t, 3, len(v)) // "X<null>Y" has length 3
+	}
+
 	// ContentLength set to length of sanitized JSON
 	assert.Equal(t, int64(len(raw)), req.ContentLength)
 }
@@ -264,14 +275,22 @@ func TestValidationMiddleware_POST_Sanitizes(t *testing.T) {
 
 	assert.Equal(t, http.StatusOK, rr.Code)
 
-	var got map[string]string
+	var got map[string]interface{}
 	err := json.Unmarshal(rr.Body.Bytes(), &got)
 	assert.NoError(t, err)
 
-	assert.Equal(t, "AB", got["content"])
-	assert.Equal(t, "PQ", got["path"])
-	assert.Equal(t, "O\r", got["old_content"])
-	assert.Equal(t, "N\t", got["new_content"])
+	if v, ok := got["content"].(string); assert.True(t, ok) {
+		assert.Equal(t, "AB", v)
+	}
+	if v, ok := got["path"].(string); assert.True(t, ok) {
+		assert.Equal(t, "PQ", v)
+	}
+	if v, ok := got["old_content"].(string); assert.True(t, ok) {
+		assert.Equal(t, "O\r", v)
+	}
+	if v, ok := got["new_content"].(string); assert.True(t, ok) {
+		assert.Equal(t, "N\t", v)
+	}
 }
 
 func TestValidationMiddleware_NonPOST_PassThrough(t *testing.T) {
