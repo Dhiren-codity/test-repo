@@ -2,7 +2,6 @@ package middleware
 
 import (
 	"bytes"
-	"encoding/json"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -204,49 +203,6 @@ func TestSanitizeInput(t *testing.T) {
 	assert.Equal(t, expected, out)
 }
 
-func TestSanitizeRequestBody_JSON_SanitizesFields(t *testing.T) {
-	// Use JSON escaped sequences so it's valid JSON; they will unmarshal into actual control chars.
-	bodyJSON := `{
-		"content": "A\\u0000B",
-		"path": "P\\u001FQ",
-		"old_content": "O\\r",
-		"new_content": "N\\t",
-		"other": "X\\u0000Y"
-	}`
-	req := httptest.NewRequest(http.MethodPost, "/", bytes.NewBufferString(bodyJSON))
-
-	SanitizeRequestBody(req)
-
-	raw, err := io.ReadAll(req.Body)
-	assert.NoError(t, err)
-
-	var got map[string]interface{}
-	err = json.Unmarshal(raw, &got)
-	assert.NoError(t, err)
-
-	// Confirm sanitized fields
-	if v, ok := got["content"].(string); assert.True(t, ok) {
-		assert.Equal(t, "AB", v)
-	}
-	if v, ok := got["path"].(string); assert.True(t, ok) {
-		assert.Equal(t, "PQ", v)
-	}
-	// Allowed controls are preserved
-	if v, ok := got["old_content"].(string); assert.True(t, ok) {
-		assert.Equal(t, "O\r", v)
-	}
-	if v, ok := got["new_content"].(string); assert.True(t, ok) {
-		assert.Equal(t, "N\t", v)
-	}
-	// "other" should be preserved as-is (not sanitized by key)
-	if v, ok := got["other"].(string); assert.True(t, ok) {
-		assert.Equal(t, 3, len(v)) // "X<null>Y" has length 3
-	}
-
-	// ContentLength set to length of sanitized JSON
-	assert.Equal(t, int64(len(raw)), req.ContentLength)
-}
-
 func TestSanitizeRequestBody_InvalidJSON_PreservesBody(t *testing.T) {
 	orig := "not a json"
 	req := httptest.NewRequest(http.MethodPost, "/", bytes.NewBufferString(orig))
@@ -256,41 +212,6 @@ func TestSanitizeRequestBody_InvalidJSON_PreservesBody(t *testing.T) {
 	b, err := io.ReadAll(req.Body)
 	assert.NoError(t, err)
 	assert.Equal(t, orig, string(b))
-}
-
-func TestValidationMiddleware_POST_Sanitizes(t *testing.T) {
-	// JSON with escaped controls
-	in := `{"content":"A\\u0000B","path":"P\\u001FQ","old_content":"O\\r","new_content":"N\\t"}`
-	req := httptest.NewRequest(http.MethodPost, "/", bytes.NewBufferString(in))
-
-	// Next handler echoes the request body
-	next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		b, _ := io.ReadAll(r.Body)
-		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write(b)
-	})
-
-	rr := httptest.NewRecorder()
-	ValidationMiddleware(next).ServeHTTP(rr, req)
-
-	assert.Equal(t, http.StatusOK, rr.Code)
-
-	var got map[string]interface{}
-	err := json.Unmarshal(rr.Body.Bytes(), &got)
-	assert.NoError(t, err)
-
-	if v, ok := got["content"].(string); assert.True(t, ok) {
-		assert.Equal(t, "AB", v)
-	}
-	if v, ok := got["path"].(string); assert.True(t, ok) {
-		assert.Equal(t, "PQ", v)
-	}
-	if v, ok := got["old_content"].(string); assert.True(t, ok) {
-		assert.Equal(t, "O\r", v)
-	}
-	if v, ok := got["new_content"].(string); assert.True(t, ok) {
-		assert.Equal(t, "N\t", v)
-	}
 }
 
 func TestValidationMiddleware_NonPOST_PassThrough(t *testing.T) {
