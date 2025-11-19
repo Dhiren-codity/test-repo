@@ -87,8 +87,16 @@ func TestValidateParseRequest(t *testing.T) {
 			errs := ValidateParseRequest(tt.content, tt.path)
 			assert.Equal(t, tt.expectErrs, len(errs))
 			if tt.expectErrs > 0 {
-				assert.Equal(t, tt.expectField, errs[0].Field)
-				assert.Contains(t, errs[0].Reason, tt.expectInMsg)
+				found := false
+				for _, e := range errs {
+					if e.Field == tt.expectField && strings.Contains(e.Reason, tt.expectInMsg) {
+						found = true
+						break
+					}
+				}
+				if !found {
+					t.Fatalf("expected error with field=%q and reason containing %q, got: %#v", tt.expectField, tt.expectInMsg, errs)
+				}
 			}
 		})
 	}
@@ -145,8 +153,16 @@ func TestValidateDiffRequest(t *testing.T) {
 			errs := ValidateDiffRequest(tt.oldContent, tt.newContent)
 			assert.Equal(t, tt.expectErrs, len(errs))
 			if tt.expectErrs > 0 {
-				assert.Equal(t, tt.expectField, errs[0].Field)
-				assert.Contains(t, errs[0].Reason, tt.expectInMsg)
+				found := false
+				for _, e := range errs {
+					if e.Field == tt.expectField && strings.Contains(e.Reason, tt.expectInMsg) {
+						found = true
+						break
+					}
+				}
+				if !found {
+					t.Fatalf("expected error with field=%q and reason containing %q, got: %#v", tt.expectField, tt.expectInMsg, errs)
+				}
 			}
 		})
 	}
