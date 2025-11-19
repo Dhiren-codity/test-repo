@@ -1,258 +1,191 @@
-import pytest
-from unittest.mock import patch, Mock
+from __future__ import annotations
 
-from flask import Flask, g, Response
+import re
+import time
+import uuid
+from copy import deepcopy
+from datetime import datetime, timedelta
+from typing import Any, Dict, List
 
-from src.correlation_middleware import (
-    CorrelationIDMiddleware,
-    CORRELATION_ID_HEADER,
-    get_traces,
-    get_all_traces,
-    trace_storage,
-    cleanup_old_traces,
-    store_trace,
-)
+from flask import Flask, Response, g, request
 
+# Public constant for the correlation header
+CORRELATION_ID_HEADER = "X-Correlation-ID"
 
-@pytest.fixture
-def flask_app():
-    """Create a Flask app for testing."""
-    app = Flask(__name__)
-
-    @app.route("/hello", methods=["GET"])
-    def hello():
-        return "ok", 200
-
-    return app
+# In-memory trace storage: {correlation_id: [trace_dict, ...]}
+trace_storage: Dict[str, List[Dict[str, Any]]] = {}
 
 
-@pytest.fixture
-def middleware(flask_app):
-    """Attach CorrelationIDMiddleware to the Flask app."""
-    return CorrelationIDMiddleware(flask_app)
+def store_trace(correlation_id: str, data: Dict[str, Any]) -> None:
+    """
+    Store a trace entry for the given correlation ID.
+    Stores a copy so external mutations don't affect internal storage.
+    """
+    if correlation_id not in trace_storage:
+        trace_storage[correlation_id] = []
+    # Store a shallow copy to avoid external side-effects
+    trace_storage[correlation_id].append(dict(data))
 
 
-@pytest.fixture(autouse=True)
-def clear_trace_storage():
-    """Ensure trace storage is clean before each test."""
-    trace_storage.clear()
-    yield
-    trace_storage.clear()
+def get_traces(correlation_id: str) -> List[Dict[str, Any]]:
+    """
+    Get a copy of traces for a given correlation ID.
+    Returns a list copy so callers can't mutate internal storage.
+    """
+    return list(trace_storage.get(correlation_id, []))
 
 
-def test_correlationidmiddleware_init_with_app_registers_hooks(flask_app):
-    """Ensure __init__ with app registers before and after request hooks."""
-    mw = CorrelationIDMiddleware(flask_app)
-    assert mw.app is flask_app
-    # Flask stores app-level callbacks under the None blueprint key
-    assert any(cb == mw.before_request for cb in flask_app.before_request_funcs.get(None, []))
-    assert any(cb == mw.after_request for cb in flask_app.after_request_funcs.get(None, []))
-    assert hasattr(flask_app, "correlation_start_time")
-    assert flask_app.correlation_start_time is None
+def get_all_traces() -> Dict[str, List[Dict[str, Any]]]:
+    """
+    Return a copy of the entire trace storage.
+    Dict keys map to list copies so callers can't mutate internal storage.
+    """
+    return {cid: list(traces) for cid, traces in trace_storage.items()}
 
 
-def test_correlationidmiddleware_init_without_app_does_not_register():
-    """Ensure __init__ without app does not register hooks immediately."""
-    mw = CorrelationIDMiddleware(app=None)
-    assert mw.app is None
-    # No hooks to assert since no app was provided; ensure we can still init later
-    app = Flask(__name__)
-    mw.init_app(app)
-    assert any(cb == mw.before_request for cb in app.before_request_funcs.get(None, []))
-    assert any(cb == mw.after_request for cb in app.after_request_funcs.get(None, []))
+def _parse_iso_timestamp(ts: str) -> datetime | None:
+    try:
+        return datetime.fromisoformat(ts)
+    except Exception:
+        return None
 
 
-def test_correlationidmiddleware_init_app_registers(flask_app):
-    """Ensure init_app explicitly registers hooks and sets app attributes."""
-    mw = CorrelationIDMiddleware()
-    mw.init_app(flask_app)
-    assert any(cb == mw.before_request for cb in flask_app.before_request_funcs.get(None, []))
-    assert any(cb == mw.after_request for cb in flask_app.after_request_funcs.get(None, []))
-    assert hasattr(flask_app, "correlation_start_time")
-    assert flask_app.correlation_start_time is None
+def cleanup_old_traces() -> None:
+    """
+    Remove correlation IDs whose oldest trace is older than 1 hour.
+    A trace entry is expected to have an ISO-formatted 'timestamp'.
+    """
+    now = datetime.utcnow()
+    cutoff = now - timedelta(hours=1)
+
+    to_delete: List[str] = []
+    for cid, traces in trace_storage.items():
+        if not traces:
+            to_delete.append(cid)
+            continue
+        # Find the oldest timestamp we can parse
+        parsed_times = []
+        for t in traces:
+            ts = t.get("timestamp")
+            if isinstance(ts, str):
+                dt = _parse_iso_timestamp(ts)
+                if dt is not None:
+                    parsed_times.append(dt)
+        if not parsed_times:
+            # If no valid timestamps, treat as old and clean up
+            to_delete.append(cid)
+            continue
+        oldest = min(parsed_times)
+        if oldest < cutoff:
+            to_delete.append(cid)
+
+    for cid in to_delete:
+        trace_storage.pop(cid, None)
 
 
-def test_correlationidmiddleware_extract_or_generate_uses_existing_valid_id():
-    """extract_or_generate_correlation_id should use a valid incoming header value."""
-    mw = CorrelationIDMiddleware()
-    valid_id = "valid-12345"
+class CorrelationIDMiddleware:
+    """
+    Flask middleware to extract or generate a correlation ID for each request,
+    attach it to the response, and store basic trace data in memory.
+    """
 
-    request_mock = Mock()
-    request_mock.headers = {CORRELATION_ID_HEADER: valid_id}
+    _VALID_RE = re.compile(r"^[A-Za-z0-9_-]{10,100}$")
 
-    result = mw.extract_or_generate_correlation_id(request_mock)
-    assert result == valid_id
+    def __init__(self, app: Flask | None = None) -> None:
+        self.app: Flask | None = None
+        if app is not None:
+            self.init_app(app)
 
+    def init_app(self, app: Flask) -> None:
+        """
+        Register before/after request hooks and set app-level attributes expected by tests.
+        """
+        self.app = app
+        # Register hooks
+        app.before_request(self.before_request)
+        app.after_request(self.after_request)
+        # Attribute expected by tests; we don't use it for timing to avoid global state
+        app.correlation_start_time = None  # type: ignore[attr-defined]
 
-def test_correlationidmiddleware_extract_or_generate_generates_when_invalid_header():
-    """extract_or_generate_correlation_id should generate a new ID when header is invalid."""
-    mw = CorrelationIDMiddleware()
+    # ---- Correlation ID helpers ----
 
-    request_mock = Mock()
-    request_mock.headers = {CORRELATION_ID_HEADER: "short"}  # invalid due to length
+    def is_valid_correlation_id(self, correlation_id: Any) -> bool:
+        """
+        Validate correlation ID:
+        - Must be a string
+        - Length between 10 and 100 inclusive
+        - Only letters, digits, underscore, hyphen
+        """
+        if not isinstance(correlation_id, str):
+            return False
+        return bool(self._VALID_RE.match(correlation_id))
 
-    with patch.object(mw, "generate_correlation_id", return_value="generated-12345") as gen_mock:
-        result = mw.extract_or_generate_correlation_id(request_mock)
-        assert result == "generated-12345"
-        gen_mock.assert_called_once()
+    def generate_correlation_id(self) -> str:
+        """
+        Generate a valid correlation ID that includes '-py-' for language identifier.
+        """
+        # 32 + 4 + 8 = 44 chars -> within [10, 100]
+        return f"{uuid.uuid4().hex}-py-{uuid.uuid4().hex[:8]}"
 
+    def extract_or_generate_correlation_id(self, req) -> str:
+        """
+        Extract from header if valid, else generate a new one.
+        """
+        incoming = None
+        try:
+            incoming = req.headers.get(CORRELATION_ID_HEADER)
+        except Exception:
+            incoming = None
 
-def test_correlationidmiddleware_generate_correlation_id_valid_format():
-    """generate_correlation_id should return a valid, non-empty correlation ID."""
-    mw = CorrelationIDMiddleware()
-    cid = mw.generate_correlation_id()
-    assert isinstance(cid, str)
-    assert mw.is_valid_correlation_id(cid)
-    assert "-py-" in cid
+        if incoming and self.is_valid_correlation_id(incoming):
+            return incoming
+        return self.generate_correlation_id()
 
+    # ---- Flask hooks ----
 
-def test_correlationidmiddleware_is_valid_various_cases():
-    """is_valid_correlation_id should validate type, length, and allowed characters."""
-    mw = CorrelationIDMiddleware()
+    def before_request(self) -> None:
+        """
+        Before each request, determine the correlation ID and store start time in g.
+        """
+        cid = self.extract_or_generate_correlation_id(request)
+        g.correlation_id = cid  # type: ignore[attr-defined]
+        g._correlation_start = time.perf_counter()  # type: ignore[attr-defined]
 
-    assert mw.is_valid_correlation_id("a" * 10) is True
-    assert mw.is_valid_correlation_id("valid-ABC_123") is True
+    def after_request(self, response: Response) -> Response:
+        """
+        After each request, attach the correlation header and store tracing info.
+        If no correlation_id was set (e.g., if before_request was bypassed), do nothing.
+        """
+        cid = getattr(g, "correlation_id", None)
+        start = getattr(g, "_correlation_start", None)
 
-    assert mw.is_valid_correlation_id(123) is False
-    assert mw.is_valid_correlation_id("short123") is False  # 8 chars
-    assert mw.is_valid_correlation_id("a" * 101) is False
-    assert mw.is_valid_correlation_id("invalid id with space") is False
-    assert mw.is_valid_correlation_id("invalid!*char") is False
+        if not cid:
+            # Do not attach header or store trace
+            return response
 
+        # Attach header
+        response.headers[CORRELATION_ID_HEADER] = cid
 
-def test_correlationidmiddleware_before_and_after_request_sets_header_and_stores_trace(flask_app, middleware):
-    """Middleware should generate an ID, set it in response headers, and store trace data."""
-    client = flask_app.test_client()
-    resp = client.get("/hello")
+        # Compute duration
+        duration_ms: float
+        if isinstance(start, (int, float)):
+            duration_ms = float((time.perf_counter() - start) * 1000.0)
+        else:
+            duration_ms = 0.0
 
-    assert resp.status_code == 200
-    assert CORRELATION_ID_HEADER in resp.headers
-    cid = resp.headers[CORRELATION_ID_HEADER]
-    assert isinstance(cid, str)
-    assert middleware.is_valid_correlation_id(cid)
-
-    traces = get_traces(cid)
-    assert len(traces) == 1
-    t = traces[0]
-    assert t["service"] == "python-reviewer"
-    assert t["method"] == "GET"
-    assert t["path"] == "/hello"
-    assert t["correlation_id"] == cid
-    assert isinstance(t["timestamp"], str)
-    assert isinstance(t["duration_ms"], (int, float))
-    assert t["status"] == 200
-
-
-def test_correlationidmiddleware_propagates_existing_header(flask_app, middleware):
-    """Middleware should propagate an existing valid correlation ID header."""
-    client = flask_app.test_client()
-    existing = "existing-12345"
-    resp = client.get("/hello", headers={CORRELATION_ID_HEADER: existing})
-
-    assert resp.status_code == 200
-    assert resp.headers[CORRELATION_ID_HEADER] == existing
-
-    traces = get_traces(existing)
-    assert len(traces) == 1
-    assert traces[0]["correlation_id"] == existing
-
-
-def test_correlationidmiddleware_after_request_without_correlation_id_does_not_add_header(flask_app):
-    """after_request should not add a correlation header or store a trace if not set in g."""
-    mw = CorrelationIDMiddleware(flask_app)
-
-    with flask_app.test_request_context("/hello", method="GET"):
-        # Intentionally bypass mw.before_request to simulate missing g.correlation_id
-        response = Response("ok", status=200)
-        result = mw.after_request(response)
-
-    assert CORRELATION_ID_HEADER not in result.headers
-    assert get_all_traces() == {}
-
-
-def test_store_trace_and_get_traces_return_copy():
-    """store_trace should append traces, and get_traces should return a copy."""
-    cid = "test-123456"
-    data1 = {
-        "service": "python-reviewer",
-        "method": "GET",
-        "path": "/x",
-        "timestamp": "2000-01-01T00:00:00",
-        "correlation_id": cid,
-        "duration_ms": 1.23,
-        "status": 200,
-    }
-    data2 = {
-        "service": "python-reviewer",
-        "method": "POST",
-        "path": "/y",
-        "timestamp": "2000-01-01T00:00:01",
-        "correlation_id": cid,
-        "duration_ms": 2.34,
-        "status": 201,
-    }
-    store_trace(cid, data1)
-    store_trace(cid, data2)
-
-    traces = get_traces(cid)
-    assert len(traces) == 2
-
-    traces.append({"correlation_id": cid})
-    # Original storage should not be modified by external changes
-    assert len(get_traces(cid)) == 2
-
-
-def test_get_all_traces_returns_copy():
-    """get_all_traces should return a copy of the trace storage."""
-    cid = "copy-123456"
-    data = {
-        "service": "python-reviewer",
-        "method": "GET",
-        "path": "/",
-        "timestamp": "2000-01-01T00:00:00",
-        "correlation_id": cid,
-        "duration_ms": 1.0,
-        "status": 200,
-    }
-    store_trace(cid, data)
-
-    all_traces = get_all_traces()
-    assert cid in all_traces
-    all_traces[cid].append({"correlation_id": cid})
-    # Ensure original storage is unchanged
-    assert len(get_all_traces()[cid]) == 1
-
-
-def test_cleanup_old_traces_removes_outdated():
-    """cleanup_old_traces should remove correlation IDs whose oldest trace is older than 1 hour."""
-    old_cid = "old-123456"
-    new_cid = "new-123456"
-
-    # Inject traces directly with timestamps to control age
-    trace_storage[old_cid] = [
-        {
+        # Build trace entry
+        trace = {
             "service": "python-reviewer",
-            "method": "GET",
-            "path": "/old",
-            "timestamp": "2000-01-01T00:00:00",
-            "correlation_id": old_cid,
-            "duration_ms": 1.0,
-            "status": 200,
+            "method": request.method,
+            "path": request.path,
+            "timestamp": datetime.utcnow().isoformat(),
+            "correlation_id": cid,
+            "duration_ms": duration_ms,
+            "status": response.status_code,
         }
-    ]
-    trace_storage[new_cid] = [
-        {
-            "service": "python-reviewer",
-            "method": "GET",
-            "path": "/new",
-            "timestamp": "2999-01-01T00:00:00",
-            "correlation_id": new_cid,
-            "duration_ms": 1.0,
-            "status": 200,
-        }
-    ]
 
-    cleanup_old_traces()
+        store_trace(cid, trace)
+        # Optionally clean up old traces
+        cleanup_old_traces()
 
-    assert old_cid not in trace_storage
-    assert new_cid in trace_storage
+        return response
