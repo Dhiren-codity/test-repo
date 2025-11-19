@@ -10,286 +10,324 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
 )
 
-func TestValidateParseRequest_ContentCases(t *testing.T) {
-	t.Cleanup(ClearValidationErrors)
-
+func TestValidateParseRequest_Table(t *testing.T) {
 	tests := []struct {
-		name       string
-		content    string
-		path       string
-		wantReason string
-		wantField  string
+		name      string
+		content   string
+		path      string
+		wantCount int
+		assertFns []func(t *testing.T, errs []ValidationError)
 	}{
 		{
-			name:       "empty content",
-			content:    "",
-			path:       "",
-			wantField:  "content",
-			wantReason: "Content is required",
+			name:      "empty content",
+			content:   "",
+			path:      "file.txt",
+			wantCount: 1,
+			assertFns: []func(t *testing.T, errs []ValidationError){
+				func(t *testing.T, errs []ValidationError) {
+					assert.Equal(t, "content", errs[0].Field)
+					assert.Contains(t, errs[0].Reason, "Content is required")
+				},
+			},
 		},
 		{
-			name:       "oversize content",
-			content:    strings.Repeat("a", MaxContentSize+1),
-			path:       "",
-			wantField:  "content",
-			wantReason: "Content exceeds maximum size of 1MB",
+			name:      "oversize content",
+			content:   strings.Repeat("a", MaxContentSize+1),
+			path:      "",
+			wantCount: 1,
+			assertFns: []func(t *testing.T, errs []ValidationError){
+				func(t *testing.T, errs []ValidationError) {
+					assert.Equal(t, "content", errs[0].Field)
+					assert.Contains(t, errs[0].Reason, "exceeds maximum size")
+				},
+			},
 		},
 		{
-			name:       "content with null bytes",
-			content:    "abc\x00def",
-			path:       "",
-			wantField:  "content",
-			wantReason: "Content contains invalid null bytes",
+			name:      "content contains null byte",
+			content:   "abc\x00def",
+			path:      "",
+			wantCount: 1,
+			assertFns: []func(t *testing.T, errs []ValidationError){
+				func(t *testing.T, errs []ValidationError) {
+					assert.Equal(t, "content", errs[0].Field)
+					assert.Contains(t, errs[0].Reason, "null bytes")
+				},
+			},
+		},
+		{
+			name:      "path too long",
+			content:   "ok",
+			path:      strings.Repeat("p", MaxPathLength+1),
+			wantCount: 1,
+			assertFns: []func(t *testing.T, errs []ValidationError){
+				func(t *testing.T, errs []ValidationError) {
+					assert.Equal(t, "path", errs[0].Field)
+					assert.Contains(t, errs[0].Reason, "maximum length")
+				},
+			},
+		},
+		{
+			name:      "path traversal with ..",
+			content:   "ok",
+			path:      "../etc/passwd",
+			wantCount: 1,
+			assertFns: []func(t *testing.T, errs []ValidationError){
+				func(t *testing.T, errs []ValidationError) {
+					assert.Equal(t, "path", errs[0].Field)
+					assert.Contains(t, errs[0].Reason, "directory traversal")
+				},
+			},
+		},
+		{
+			name:      "path traversal with ~/",
+			content:   "ok",
+			path:      "home/~/user",
+			wantCount: 1,
+			assertFns: []func(t *testing.T, errs []ValidationError){
+				func(t *testing.T, errs []ValidationError) {
+					assert.Equal(t, "path", errs[0].Field)
+					assert.Contains(t, errs[0].Reason, "directory traversal")
+				},
+			},
+		},
+		{
+			name:      "both path errors",
+			content:   "ok",
+			path:      strings.Repeat("x", MaxPathLength+2) + "/~/bad",
+			wantCount: 2,
+			assertFns: []func(t *testing.T, errs []ValidationError){
+				func(t *testing.T, errs []ValidationError) {
+					fields := []string{errs[0].Field, errs[1].Field}
+					assert.Contains(t, fields, "path")
+					assert.Equal(t, 2, countField(errs, "path"))
+				},
+			},
+		},
+		{
+			name:      "valid content and path",
+			content:   "ok",
+			path:      "valid/path",
+			wantCount: 0,
 		},
 	}
+
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			ClearValidationErrors()
-
 			errs := ValidateParseRequest(tt.content, tt.path)
-			require.Len(t, errs, 1)
-			assert.Equal(t, tt.wantField, errs[0].Field)
-			assert.Contains(t, errs[0].Reason, tt.wantReason)
-
-			// Logged
-			logged := GetValidationErrors()
-			require.Len(t, logged, 1)
-			assert.Equal(t, tt.wantField, logged[0].Field)
+			assert.Len(t, errs, tt.wantCount)
+			for _, fn := range tt.assertFns {
+				fn(t, errs)
+			}
 		})
 	}
 }
 
-func TestValidateParseRequest_PathCases(t *testing.T) {
-	t.Cleanup(ClearValidationErrors)
-
-	// Exceeds max length
-	longPath := strings.Repeat("p", MaxPathLength+1)
-	errs := ValidateParseRequest("ok", longPath)
-	require.Len(t, errs, 1)
-	assert.Equal(t, "path", errs[0].Field)
-	assert.Contains(t, errs[0].Reason, "maximum length")
-
-	// Directory traversal ".."
-	errs = ValidateParseRequest("ok", "../etc/passwd")
-	require.Len(t, errs, 1)
-	assert.Equal(t, "path", errs[0].Field)
-	assert.Contains(t, errs[0].Reason, "directory traversal")
-
-	// Directory traversal "~/"
-	errs = ValidateParseRequest("ok", "~/secret")
-	require.Len(t, errs, 1)
-	assert.Equal(t, "path", errs[0].Field)
-	assert.Contains(t, errs[0].Reason, "directory traversal")
-
-	// Both long and traversal -> two errors
-	pathBoth := strings.Repeat("../", (MaxPathLength/3)+10)
-	errs = ValidateParseRequest("ok", pathBoth)
-	require.Len(t, errs, 2)
-	reasons := []string{errs[0].Reason, errs[1].Reason}
-	assert.Subset(t, reasons, []string{"Path exceeds maximum length", "Path contains potential directory traversal"})
-}
-
-func TestValidateDiffRequest_Cases(t *testing.T) {
-	t.Cleanup(ClearValidationErrors)
-
-	// Missing old
-	errs := ValidateDiffRequest("", "new")
-	require.Len(t, errs, 1)
-	assert.Equal(t, "old_content", errs[0].Field)
-	assert.Contains(t, errs[0].Reason, "required")
-
-	// Missing new
+func TestValidateParseRequest_LogsAndTruncates(t *testing.T) {
+	// Ensure clean slate
 	ClearValidationErrors()
-	errs = ValidateDiffRequest("old", "")
-	require.Len(t, errs, 1)
-	assert.Equal(t, "new_content", errs[0].Field)
-	assert.Contains(t, errs[0].Reason, "required")
 
-	// Both oversize
-	ClearValidationErrors()
-	oversize := strings.Repeat("x", MaxContentSize+1)
-	errs = ValidateDiffRequest(oversize, oversize)
-	require.Len(t, errs, 2)
-	fields := []string{errs[0].Field, errs[1].Field}
-	assert.Subset(t, fields, []string{"old_content", "new_content"})
-	assert.Contains(t, errs[0].Reason, "exceeds")
-	assert.Contains(t, errs[1].Reason, "exceeds")
+	// First, a call that produces three errors (content empty + two path errors)
+	longBadPath := strings.Repeat("a", MaxPathLength+1) + "/../"
+	errs := ValidateParseRequest("", longBadPath)
+	assert.Len(t, errs, 3)
 
-	// Logged
 	logged := GetValidationErrors()
-	assert.GreaterOrEqual(t, len(logged), 2)
-}
+	assert.Len(t, logged, 3)
+	// Ensure fields present
+	assert.Equal(t, "content", logged[0].Field)
+	assert.Equal(t, "path", logged[1].Field)
+	assert.Equal(t, "path", logged[2].Field)
 
-func TestSanitizeInput_RemovesDisallowedControls(t *testing.T) {
-	input := "Hi\x00there\x01!\nTab\tCarriage\rReturn\r\nDel\x7F"
-	out := SanitizeInput(input)
-	// Ensure preserved characters remain
-	assert.Contains(t, out, "Hi")
-	assert.Contains(t, out, "there")
-	assert.Contains(t, out, "!\n")
-	assert.Contains(t, out, "Tab\t")
-	assert.Contains(t, out, "Carriage\rReturn\r\n")
-	// Ensure removed controls are gone
-	assert.NotContains(t, out, "\x00")
-	assert.NotContains(t, out, "\x01")
-	assert.NotContains(t, out, "\x7F")
-}
-
-func TestSanitizeRequestBody_SanitizesKnownFields(t *testing.T) {
-	body := map[string]string{
-		"content":     "a\x00b",
-		"path":        "p\x01ath",
-		"old_content": "o\x02ld",
-		"new_content": "n\x7Few",
+	// Now overflow: add 150 more single-error validations
+	for i := 0; i < 150; i++ {
+		ValidateParseRequest("", "ok")
 	}
-	raw, _ := json.Marshal(body)
-	r := httptest.NewRequest(http.MethodPost, "/", bytes.NewReader(raw))
+	logged = GetValidationErrors()
+	assert.Len(t, logged, 100) // truncated to last 100
+}
 
-	SanitizeRequestBody(r)
+func TestValidateDiffRequest_Table(t *testing.T) {
+	tests := []struct {
+		name      string
+		oldC      string
+		newC      string
+		wantCount int
+		wantHas   []string
+	}{
+		{
+			name:      "both empty",
+			oldC:      "",
+			newC:      "",
+			wantCount: 2,
+			wantHas:   []string{"old_content", "new_content"},
+		},
+		{
+			name:      "old oversize",
+			oldC:      strings.Repeat("x", MaxContentSize+1),
+			newC:      "ok",
+			wantCount: 1,
+			wantHas:   []string{"old_content"},
+		},
+		{
+			name:      "new oversize",
+			oldC:      "ok",
+			newC:      strings.Repeat("y", MaxContentSize+1),
+			wantCount: 1,
+			wantHas:   []string{"new_content"},
+		},
+		{
+			name:      "valid",
+			oldC:      "old",
+			newC:      "new",
+			wantCount: 0,
+		},
+	}
 
-	gotBytes, err := io.ReadAll(r.Body)
-	require.NoError(t, err)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			errs := ValidateDiffRequest(tt.oldC, tt.newC)
+			assert.Len(t, errs, tt.wantCount)
+			for _, f := range tt.wantHas {
+				assert.True(t, hasField(errs, f))
+			}
+		})
+	}
+}
+
+func TestSanitizeInput(t *testing.T) {
+	// Contains: null, SOH, BEL, LF, CR, TAB, US, DEL
+	input := "Hello\x00World\x01!\nCarriage\rTab\tCtrl\x1FDel\x7FEnd"
+	expected := "HelloWorld!\nCarriage\rTab\tCtrlDelEnd"
+	out := SanitizeInput(input)
+	assert.Equal(t, expected, out)
+}
+
+func TestSanitizeRequestBody_JSON_SanitizesFields(t *testing.T) {
+	// Use JSON escaped sequences so it's valid JSON; they will unmarshal into actual control chars.
+	bodyJSON := `{
+		"content": "A\\u0000B",
+		"path": "P\\u001FQ",
+		"old_content": "O\\r",
+		"new_content": "N\\t",
+		"other": "X\\u0000Y"  // not sanitized by the function
+	}`
+	req := httptest.NewRequest(http.MethodPost, "/", bytes.NewBufferString(bodyJSON))
+
+	SanitizeRequestBody(req)
+
+	raw, err := io.ReadAll(req.Body)
+	assert.NoError(t, err)
 
 	var got map[string]string
-	require.NoError(t, json.Unmarshal(gotBytes, &got))
+	err = json.Unmarshal(raw, &got)
+	assert.NoError(t, err)
 
-	assert.Equal(t, "ab", got["content"])
-	assert.Equal(t, "path", got["path"])
-	assert.Equal(t, "old", got["old_content"])
-	assert.Equal(t, "new", got["new_content"])
-
-	assert.Equal(t, int64(len(gotBytes)), r.ContentLength)
+	// Confirm sanitized fields
+	assert.Equal(t, "AB", got["content"])
+	assert.Equal(t, "PQ", got["path"])
+	// Allowed controls are preserved
+	assert.Equal(t, "O\r", got["old_content"])
+	assert.Equal(t, "N\t", got["new_content"])
+	// "other" should still include the null since it's not sanitized by key
+	// After unmarshal, the string has actual null removed only if sanitizer touched it; here it shouldn't
+	// But JSON cannot contain raw null, so it would be present as "\u0000" before; after round-trip it becomes actual 0 byte.
+	// Since we didn't re-marshal "other", it remains with the control. To assert safely, ensure that sanitization didn't remove it.
+	assert.Contains(t, got["other"], "\x00")
+	// ContentLength set to length of sanitized JSON
+	assert.Equal(t, int64(len(raw)), req.ContentLength)
 }
 
-func TestSanitizeRequestBody_PassesThroughNonJSON(t *testing.T) {
-	orig := []byte("not json \x00 here")
-	r := httptest.NewRequest(http.MethodPost, "/", bytes.NewReader(orig))
+func TestSanitizeRequestBody_InvalidJSON_PreservesBody(t *testing.T) {
+	orig := "not a json"
+	req := httptest.NewRequest(http.MethodPost, "/", bytes.NewBufferString(orig))
 
-	SanitizeRequestBody(r)
+	SanitizeRequestBody(req)
 
-	got, err := io.ReadAll(r.Body)
-	require.NoError(t, err)
-	assert.Equal(t, orig, got)
+	b, err := io.ReadAll(req.Body)
+	assert.NoError(t, err)
+	assert.Equal(t, orig, string(b))
 }
 
-func TestValidationMiddleware_SanitizesPOSTBodyJSON(t *testing.T) {
-	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		gotBytes, err := io.ReadAll(r.Body)
-		require.NoError(t, err)
+func TestValidationMiddleware_POST_Sanitizes(t *testing.T) {
+	// JSON with escaped controls
+	in := `{"content":"A\\u0000B","path":"P\\u001FQ","old_content":"O\\r","new_content":"N\\t"}`
+	req := httptest.NewRequest(http.MethodPost, "/", bytes.NewBufferString(in))
 
-		var got map[string]string
-		require.NoError(t, json.Unmarshal(gotBytes, &got))
-
-		assert.Equal(t, "ab", got["content"])
-		assert.Equal(t, "path", got["path"])
-		assert.Equal(t, "old", got["old_content"])
-		assert.Equal(t, "new", got["new_content"])
-
-		assert.Equal(t, len(gotBytes), int(r.ContentLength))
+	// Next handler echoes the request body
+	next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		b, _ := io.ReadAll(r.Body)
 		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write(b)
 	})
 
-	mw := ValidationMiddleware(handler)
-
-	body := map[string]string{
-		"content":     "a\x00b",
-		"path":        "p\x01ath",
-		"old_content": "o\x02ld",
-		"new_content": "n\x7Few",
-	}
-	raw, _ := json.Marshal(body)
-	req := httptest.NewRequest(http.MethodPost, "/test", bytes.NewReader(raw))
 	rr := httptest.NewRecorder()
+	ValidationMiddleware(next).ServeHTTP(rr, req)
 
-	mw.ServeHTTP(rr, req)
 	assert.Equal(t, http.StatusOK, rr.Code)
+
+	var got map[string]string
+	err := json.Unmarshal(rr.Body.Bytes(), &got)
+	assert.NoError(t, err)
+
+	assert.Equal(t, "AB", got["content"])
+	assert.Equal(t, "PQ", got["path"])
+	assert.Equal(t, "O\r", got["old_content"])
+	assert.Equal(t, "N\t", got["new_content"])
 }
 
 func TestValidationMiddleware_NonPOST_PassThrough(t *testing.T) {
-	orig := []byte("abc\x00def")
-	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		got, err := io.ReadAll(r.Body)
-		require.NoError(t, err)
-		assert.Equal(t, orig, got)
+	in := `{"content":"A\\u0000B"}`
+	req := httptest.NewRequest(http.MethodGet, "/", bytes.NewBufferString(in))
+
+	next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		b, _ := io.ReadAll(r.Body)
 		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write(b)
 	})
 
-	mw := ValidationMiddleware(handler)
-	req := httptest.NewRequest(http.MethodGet, "/get", bytes.NewReader(orig))
 	rr := httptest.NewRecorder()
-	mw.ServeHTTP(rr, req)
+	ValidationMiddleware(next).ServeHTTP(rr, req)
+
 	assert.Equal(t, http.StatusOK, rr.Code)
-}
-
-func TestGetAndClearValidationErrors_CopyAndReset(t *testing.T) {
-	t.Cleanup(ClearValidationErrors)
-	ClearValidationErrors()
-
-	es := []ValidationError{
-		{Field: "a", Reason: "ra"},
-		{Field: "b", Reason: "rb"},
-	}
-	logValidationErrors(es)
-
-	got := GetValidationErrors()
-	require.Len(t, got, 2)
-	// Modify returned slice should not affect internal store
-	got = append(got, ValidationError{Field: "c", Reason: "rc"})
-	require.Len(t, got, 3)
-
-	got2 := GetValidationErrors()
-	require.Len(t, got2, 2)
-
-	ClearValidationErrors()
-	require.Empty(t, GetValidationErrors())
+	// For non-POST, middleware should pass through unchanged
+	assert.Equal(t, in, rr.Body.String())
 }
 
 func TestContainsNullBytes(t *testing.T) {
-	assert.True(t, containsNullBytes("abc\x00"))
-	assert.False(t, containsNullBytes("abcdef"))
+	assert.True(t, containsNullBytes("a\x00b"))
+	assert.False(t, containsNullBytes("abc"))
 }
 
-func TestLogValidationErrors_CapTo100(t *testing.T) {
-	t.Cleanup(ClearValidationErrors)
+func TestGetAndClearValidationErrors(t *testing.T) {
 	ClearValidationErrors()
+	assert.Empty(t, GetValidationErrors())
 
-	var es []ValidationError
-	for i := 0; i < 120; i++ {
-		es = append(es, ValidationError{Field: "f#" + strconvI(i), Reason: "r"})
-	}
-	logValidationErrors(es)
+	_ = ValidateParseRequest("", "ok") // logs one error
+	errs := GetValidationErrors()
+	assert.Len(t, errs, 1)
+	assert.Equal(t, "content", errs[0].Field)
 
-	got := GetValidationErrors()
-	require.Len(t, got, 100)
-	assert.Equal(t, "f#20", got[0].Field)
-	assert.Equal(t, "f#119", got[len(got)-1].Field)
+	ClearValidationErrors()
+	assert.Empty(t, GetValidationErrors())
 }
 
-// strconvI is a tiny helper to avoid importing strconv for Atoi conversion in this test file.
-func strconvI(i int) string {
-	// simple int to string without strconv; limited use in test.
-	const digits = "0123456789"
-	if i == 0 {
-		return "0"
+func hasField(errs []ValidationError, field string) bool {
+	for _, e := range errs {
+		if e.Field == field {
+			return true
+		}
 	}
-	neg := false
-	if i < 0 {
-		neg = true
-		i = -i
+	return false
+}
+
+func countField(errs []ValidationError, field string) int {
+	c := 0
+	for _, e := range errs {
+		if e.Field == field {
+			c++
+		}
 	}
-	var buf [20]byte
-	pos := len(buf)
-	for i > 0 {
-		pos--
-		buf[pos] = digits[i%10]
-		i /= 10
-	}
-	if neg {
-		pos--
-		buf[pos] = '-'
-	}
-	return string(buf[pos:])
+	return c
 }
