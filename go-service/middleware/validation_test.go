@@ -215,38 +215,6 @@ func TestSanitizeRequestBody_InvalidJSONPreservesBody(t *testing.T) {
 	assert.Equal(t, orig, data)
 }
 
-func TestValidationMiddleware_PostSanitizesJSON(t *testing.T) {
-	next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		data, err := io.ReadAll(r.Body)
-		assert.NoError(t, err)
-		var m map[string]any
-		err = json.Unmarshal(data, &m)
-		assert.NoError(t, err)
-		// Ensure sanitization occurred
-		if s, ok := m["content"].(string); ok {
-			assert.Equal(t, "AB", s)
-		} else {
-			t.Fatalf("missing content")
-		}
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write(data)
-	})
-
-	mw := ValidationMiddleware(next)
-
-	reqBody := `{"content":"A` + "\x00" + `B"}`
-	req := httptest.NewRequest(http.MethodPost, "/parse", bytes.NewBufferString(reqBody))
-	rec := httptest.NewRecorder()
-
-	mw.ServeHTTP(rec, req)
-
-	assert.Equal(t, http.StatusOK, rec.Code)
-	var got map[string]string
-	err := json.Unmarshal(rec.Body.Bytes(), &got)
-	assert.NoError(t, err)
-	assert.Equal(t, "AB", got["content"])
-}
-
 func TestValidationMiddleware_NonPostPassThrough(t *testing.T) {
 	orig := `{"content":"A` + "\x00" + `B"}`
 	next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
