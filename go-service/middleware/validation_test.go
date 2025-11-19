@@ -211,7 +211,7 @@ func TestSanitizeRequestBody_JSON_SanitizesFields(t *testing.T) {
 		"path": "P\\u001FQ",
 		"old_content": "O\\r",
 		"new_content": "N\\t",
-		"other": "X\\u0000Y"  // not sanitized by the function
+		"other": "X\\u0000Y"
 	}`
 	req := httptest.NewRequest(http.MethodPost, "/", bytes.NewBufferString(bodyJSON))
 
@@ -231,9 +231,6 @@ func TestSanitizeRequestBody_JSON_SanitizesFields(t *testing.T) {
 	assert.Equal(t, "O\r", got["old_content"])
 	assert.Equal(t, "N\t", got["new_content"])
 	// "other" should still include the null since it's not sanitized by key
-	// After unmarshal, the string has actual null removed only if sanitizer touched it; here it shouldn't
-	// But JSON cannot contain raw null, so it would be present as "\u0000" before; after round-trip it becomes actual 0 byte.
-	// Since we didn't re-marshal "other", it remains with the control. To assert safely, ensure that sanitization didn't remove it.
 	assert.Contains(t, got["other"], "\x00")
 	// ContentLength set to length of sanitized JSON
 	assert.Equal(t, int64(len(raw)), req.ContentLength)
