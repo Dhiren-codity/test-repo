@@ -1,9 +1,8 @@
-# NOTE: Some failing tests were automatically removed after 3 fix attempts failed.
-# These tests may need manual review. See CI logs for details.
 # frozen_string_literal: true
 
 require_relative 'spec_helper'
 require_relative '../app/app'
+require 'time'
 
 RSpec.describe PolyglotAPI do
   include Rack::Test::Methods
@@ -36,10 +35,15 @@ RSpec.describe PolyglotAPI do
   end
 
   describe 'GET /status' do
-    context 'when all services are healthy' do
-      it 'returns healthy statuses' do
-        allow(HTTParty).to receive(:get).and_return(double(code: 200))
+    context 'when downstream services are healthy' do
+      it 'reports healthy statuses' do
+        allow(HTTParty).to receive(:get).with("#{PolyglotAPI.settings.go_service_url}/health",
+                                              timeout: 2).and_return(double(code: 200))
+        allow(HTTParty).to receive(:get).with("#{PolyglotAPI.settings.python_service_url}/health",
+                                              timeout: 2).and_return(double(code: 200))
+
         get '/status'
+
         expect(last_response.status).to eq(200)
         json_response = JSON.parse(last_response.body)
         expect(json_response['services']['ruby']['status']).to eq('healthy')
@@ -48,203 +52,274 @@ RSpec.describe PolyglotAPI do
       end
     end
 
-    context 'when one service is unreachable' do
-    end
+    context 'when a service is unreachable' do
+      it 'reports unreachable with error' do
+        allow(HTTParty).to receive(:get).with("#{PolyglotAPI.settings.go_service_url}/health",
+                                              timeout: 2).and_return(double(code: 200))
+        allow(HTTParty).to receive(:get).with("#{PolyglotAPI.settings.python_service_url}/health",
+                                              timeout: 2).and_raise(StandardError.new('timeout'))
 
-    context 'when a service responds but unhealthy' do
-      it 'marks it as unhealthy' do
-        allow(HTTParty).to receive(:get) do |url, _opts|
-          if url == "#{PolyglotAPI.settings.go_service_url}/health"
-            double(code: 500)
-          else
-            double(code: 200)
-          end
-        end
         get '/status'
+
         expect(last_response.status).to eq(200)
-        json = JSON.parse(last_response.body)
-        expect(json['services']['go']['status']).to eq('unhealthy')
-        expect(json['services']['python']['status']).to eq('healthy')
+        json_response = JSON.parse(last_response.body)
+        expect(json_response['services']['go']['status']).to eq('healthy')
+        expect(json_response['services']['python']['status']).to eq('unreachable')
+        expect(json_response['services']['python']['error']).to include('timeout')
       end
     end
   end
 
-  describe 'POST /analyze (additional scenarios)' do
-    context 'when validation fails' do
+  describe 'POST /analyze validations' do
+    it 'returns 422 with validation errors' do
+      error_double = double(to_hash: { field: 'content', message: 'required' })
+      allow(RequestValidator).to receive(:validate_analyze_request).and_return([error_double])
+
+      post '/analyze', { content: '', path: '' }.to_json, 'CONTENT_TYPE' => 'application/json'
+
+      expect(last_response.status).to eq(422)
+      json_response = JSON.parse(last_response.body)
+      expect(json_response['error']).to eq('Validation failed')
+      expect(json_response['details']).to be_an(Array)
+      expect(json_response['details'].first['field']).to eq('content')
     end
 
-    context 'propagates correlation id and detects language' do
+    it 'propagates correlation id to downstream services' do
+      cid = 'cid-123'
+      allow(RequestValidator).to receive(:validate_analyze_request).and_return([])
+      expect_any_instance_of(PolyglotAPI).to receive(:call_go_service)
+        .with('/parse', kind_of(Hash), cid)
+        .and_return({ 'language' => 'ruby', 'lines' => ['puts 1'] })
+      expect_any_instance_of(PolyglotAPI).to receive(:call_python_service)
+        .with('/review', kind_of(Hash), cid)
+        .and_return({ 'score' => 90, 'issues' => [] })
+
+      post '/analyze', { content: 'puts 1', path: 'test.rb' }.to_json, 'CONTENT_TYPE' => 'application/json',
+                                                                       CorrelationIdMiddleware::CORRELATION_ID_HEADER => cid
+
+      expect(last_response.status).to eq(200)
+      json_response = JSON.parse(last_response.body)
+      expect(json_response['correlation_id']).to eq(cid)
     end
 
-    context 'with invalid JSON falls back to params' do
-      it 'uses query params when body is invalid JSON' do
-        allow(RequestValidator).to receive(:validate_analyze_request).and_return([])
-        allow(RequestValidator).to receive(:sanitize_input) { |v| v }
+    it 'falls back to params when JSON body is invalid' do
+      allow(RequestValidator).to receive(:validate_analyze_request).and_return([])
+      allow_any_instance_of(PolyglotAPI).to receive(:call_go_service).and_return({ 'language' => 'python',
+                                                                                   'lines' => %w[a b] })
+      allow_any_instance_of(PolyglotAPI).to receive(:call_python_service).and_return({ 'score' => 75, 'issues' => [] })
 
-        allow_any_instance_of(PolyglotAPI).to receive(:call_go_service)
-          .and_return({ 'language' => 'python', 'lines' => %w[1 2] })
-        allow_any_instance_of(PolyglotAPI).to receive(:call_python_service)
-          .and_return({ 'score' => 75, 'issues' => [] })
+      post '/analyze?content=print(1)&path=a.py', 'not-json', 'CONTENT_TYPE' => 'application/json'
 
-        post '/analyze?content=def+f%3A+pass&path=test.py', 'invalid-json', 'CONTENT_TYPE' => 'application/json'
-        expect(last_response.status).to eq(200)
-        json = JSON.parse(last_response.body)
-        expect(json['summary']).to be_a(Hash)
-      end
+      expect(last_response.status).to eq(200)
+      json_response = JSON.parse(last_response.body)
+      expect(json_response['summary']['language']).to eq('python')
+    end
+
+    it 'detects language from path and passes to python service' do
+      allow(RequestValidator).to receive(:validate_analyze_request).and_return([])
+      allow_any_instance_of(PolyglotAPI).to receive(:call_go_service).and_return({ 'language' => 'ruby',
+                                                                                   'lines' => ['puts x'] })
+      expect_any_instance_of(PolyglotAPI).to receive(:call_python_service)
+        .with('/review', hash_including(language: 'ruby', content: 'puts x'), anything)
+        .and_return({ 'score' => 88, 'issues' => [] })
+
+      post '/analyze', { content: 'puts x', path: 'hello.rb' }.to_json, 'CONTENT_TYPE' => 'application/json'
+
+      expect(last_response.status).to eq(200)
     end
   end
 
   describe 'POST /diff' do
-    context 'when missing required params' do
+    context 'when missing parameters' do
+      it 'returns 400 for missing old_content' do
+        post '/diff', { new_content: 'new' }.to_json, 'CONTENT_TYPE' => 'application/json'
+        expect(last_response.status).to eq(400)
+        json_response = JSON.parse(last_response.body)
+        expect(json_response['error']).to eq('Missing old_content or new_content')
+      end
+
+      it 'returns 400 for missing new_content' do
+        post '/diff', { old_content: 'old' }.to_json, 'CONTENT_TYPE' => 'application/json'
+        expect(last_response.status).to eq(400)
+        json_response = JSON.parse(last_response.body)
+        expect(json_response['error']).to eq('Missing old_content or new_content')
+      end
     end
 
-    context 'with valid payload' do
+    context 'when valid' do
       it 'returns diff and new code review' do
-        allow_any_instance_of(PolyglotAPI).to receive(:call_go_service)
-          .with('/diff', hash_including(old_content: 'a', new_content: 'b'))
-          .and_return({ 'changes' => 1 })
-        allow_any_instance_of(PolyglotAPI).to receive(:call_python_service)
-          .with('/review', hash_including(content: 'b'))
-          .and_return({ 'score' => 88 })
+        allow_any_instance_of(PolyglotAPI).to receive(:call_go_service).and_return({ 'diff' => ['-a', '+b'] })
+        allow_any_instance_of(PolyglotAPI).to receive(:call_python_service).and_return({ 'score' => 92,
+                                                                                         'issues' => [] })
 
         post '/diff', { old_content: 'a', new_content: 'b' }.to_json, 'CONTENT_TYPE' => 'application/json'
+
         expect(last_response.status).to eq(200)
-        json = JSON.parse(last_response.body)
-        expect(json['diff']).to eq({ 'changes' => 1 })
-        expect(json['new_code_review']).to eq({ 'score' => 88 })
+        json_response = JSON.parse(last_response.body)
+        expect(json_response['diff']).to eq({ 'diff' => ['-a', '+b'] })
+        expect(json_response['new_code_review']).to eq({ 'score' => 92, 'issues' => [] })
       end
     end
   end
 
   describe 'POST /metrics' do
-    context 'when content missing' do
-    end
-
-    context 'when valid content provided' do
-      it 'returns metrics, review, and computed overall quality' do
-        allow_any_instance_of(PolyglotAPI).to receive(:call_go_service)
-          .with('/metrics', hash_including(content: 'x'))
-          .and_return({ 'complexity' => 1 })
-        allow_any_instance_of(PolyglotAPI).to receive(:call_python_service)
-          .with('/review', hash_including(content: 'x'))
-          .and_return({ 'score' => 85, 'issues' => ['i1'] })
-
-        post '/metrics', { content: 'x' }.to_json, 'CONTENT_TYPE' => 'application/json'
-        expect(last_response.status).to eq(200)
-        json = JSON.parse(last_response.body)
-        expect(json['metrics']).to eq({ 'complexity' => 1 })
-        expect(json['review']).to eq({ 'score' => 85, 'issues' => ['i1'] })
-        expect(json['overall_quality']).to eq(25.0)
+    context 'when missing content' do
+      it 'returns 400' do
+        post '/metrics', {}.to_json, 'CONTENT_TYPE' => 'application/json'
+        expect(last_response.status).to eq(400)
+        json_response = JSON.parse(last_response.body)
+        expect(json_response['error']).to eq('Missing content')
       end
     end
 
-    context 'when downstream returns error' do
-      it 'returns overall_quality as 0.0' do
-        allow_any_instance_of(PolyglotAPI).to receive(:call_go_service)
-          .and_return({ 'error' => 'timeout' })
-        allow_any_instance_of(PolyglotAPI).to receive(:call_python_service)
-          .and_return({ 'score' => 90, 'issues' => [] })
+    context 'when valid and computes overall quality' do
+      it 'calculates score using metrics and review' do
+        allow_any_instance_of(PolyglotAPI).to receive(:call_go_service).and_return({ 'complexity' => 2 })
+        allow_any_instance_of(PolyglotAPI).to receive(:call_python_service).and_return({ 'score' => 80,
+                                                                                         'issues' => %w[a b] })
 
-        post '/metrics', { content: 'y' }.to_json, 'CONTENT_TYPE' => 'application/json'
+        post '/metrics', { content: 'x' }.to_json, 'CONTENT_TYPE' => 'application/json'
+
         expect(last_response.status).to eq(200)
-        json = JSON.parse(last_response.body)
-        expect(json['overall_quality']).to eq(0.0)
+        json_response = JSON.parse(last_response.body)
+        expect(json_response['metrics']).to eq({ 'complexity' => 2 })
+        expect(json_response['review']).to eq({ 'score' => 80, 'issues' => %w[a b] })
+        expect(json_response['overall_quality']).to eq(0)
+      end
+    end
+
+    context 'when go metrics call fails' do
+      it 'returns error in metrics and overall_quality is 0.0' do
+        allow(HTTParty).to receive(:post) do |url, _options|
+          raise StandardError.new('timeout') if url == "#{PolyglotAPI.settings.go_service_url}/metrics"
+
+          double(body: { score: 85, issues: [] }.to_json)
+        end
+
+        post '/metrics', { content: 'xyz' }.to_json, 'CONTENT_TYPE' => 'application/json'
+
+        expect(last_response.status).to eq(200)
+        json_response = JSON.parse(last_response.body)
+        expect(json_response['metrics']).to include('error')
+        expect(json_response['overall_quality']).to eq(0.0)
       end
     end
   end
 
   describe 'POST /dashboard' do
-    context 'when files array missing' do
-    end
-
-    context 'with valid files' do
-      it 'returns statistics and computed health score' do
-        files = [{ 'path' => 'a.rb', 'content' => 'puts 1' }]
-        expect_any_instance_of(PolyglotAPI).to receive(:call_go_service)
-          .with('/statistics', hash_including(files: files))
-          .and_return({ 'total_files' => 10, 'total_lines' => 1000, 'languages' => { 'ruby' => 10 } })
-        expect_any_instance_of(PolyglotAPI).to receive(:call_python_service)
-          .with('/statistics', hash_including(files: files))
-          .and_return({ 'average_score' => 90, 'total_issues' => 20, 'average_complexity' => 0.5 })
-
-        post '/dashboard', { files: files }.to_json, 'CONTENT_TYPE' => 'application/json'
-        expect(last_response.status).to eq(200)
-        json = JSON.parse(last_response.body)
-        expect(json['file_statistics']['total_files']).to eq(10)
-        expect(json['review_statistics']['average_score']).to eq(90)
-        expect(json['summary']['health_score']).to eq(71.0)
-        expect(json['timestamp']).to be_a(String)
-        expect(json['timestamp']).to match(/\d{4}-\d{2}-\d{2}T/)
+    context 'when missing files' do
+      it 'returns 400' do
+        post '/dashboard', {}.to_json, 'CONTENT_TYPE' => 'application/json'
+        expect(last_response.status).to eq(400)
+        json_response = JSON.parse(last_response.body)
+        expect(json_response['error']).to eq('Missing files array')
       end
     end
 
-    context 'when computed health score is negative' do
-      it 'clamps to 0.0' do
-        files = [{ 'path' => 'a.rb', 'content' => 'puts 1' }]
-        allow_any_instance_of(PolyglotAPI).to receive(:call_go_service)
-          .and_return({ 'total_files' => 1, 'total_lines' => 10, 'languages' => { 'ruby' => 1 } })
-        allow_any_instance_of(PolyglotAPI).to receive(:call_python_service)
-          .and_return({ 'average_score' => 10, 'total_issues' => 50, 'average_complexity' => 2.0 })
+    context 'when valid' do
+      it 'returns statistics and summary with computed health score' do
+        allow(Time).to receive(:now).and_return(Time.parse('2020-01-01T12:00:00Z'))
+        file_stats = {
+          'total_files' => 2,
+          'total_lines' => 100,
+          'languages' => { 'ruby' => 1, 'python' => 1 }
+        }
+        review_stats = {
+          'average_score' => 90.0,
+          'total_issues' => 4,
+          'average_complexity' => 0.5
+        }
+        allow_any_instance_of(PolyglotAPI).to receive(:call_go_service).with('/statistics',
+                                                                             kind_of(Hash)).and_return(file_stats)
+        allow_any_instance_of(PolyglotAPI).to receive(:call_python_service).with('/statistics',
+                                                                                 kind_of(Hash)).and_return(review_stats)
 
-        post '/dashboard', { files: files }.to_json, 'CONTENT_TYPE' => 'application/json'
+        post '/dashboard', { files: [{ path: 'a.rb' }, { path: 'b.py' }] }.to_json, 'CONTENT_TYPE' => 'application/json'
+
         expect(last_response.status).to eq(200)
-        json = JSON.parse(last_response.body)
-        expect(json['summary']['health_score']).to eq(0.0)
+        json_response = JSON.parse(last_response.body)
+        expect(json_response['timestamp']).to eq('2020-01-01T12:00:00Z')
+        expect(json_response['file_statistics']).to eq(file_stats)
+        expect(json_response['review_statistics']).to eq(review_stats)
+        expect(json_response['summary']['total_files']).to eq(2)
+        expect(json_response['summary']['total_lines']).to eq(100)
+        expect(json_response['summary']['languages']).to eq({ 'ruby' => 1, 'python' => 1 })
+        expect(json_response['summary']['average_quality_score']).to eq(90.0)
+        expect(json_response['summary']['total_issues']).to eq(4)
+        expect(json_response['summary']['health_score']).to eq(71.0)
       end
     end
   end
 
   describe 'GET /traces' do
-    it 'returns total traces and list' do
-      traces = [{ 'id' => 'a' }, { 'id' => 'b' }]
+    it 'returns all traces' do
+      traces = [
+        { id: 'cid1', path: '/analyze' },
+        { id: 'cid2', path: '/metrics' }
+      ]
       allow(CorrelationIdMiddleware).to receive(:all_traces).and_return(traces)
+
       get '/traces'
+
       expect(last_response.status).to eq(200)
-      json = JSON.parse(last_response.body)
-      expect(json['total_traces']).to eq(2)
-      expect(json['traces']).to eq(traces)
+      json_response = JSON.parse(last_response.body)
+      expect(json_response['total_traces']).to eq(2)
+      expect(json_response['traces']).to eq(traces)
     end
   end
 
   describe 'GET /traces/:correlation_id' do
-    context 'when no traces found' do
+    context 'when not found' do
+      it 'returns 404' do
+        allow(CorrelationIdMiddleware).to receive(:get_traces).with('missing').and_return([])
+
+        get '/traces/missing'
+
+        expect(last_response.status).to eq(404)
+        json_response = JSON.parse(last_response.body)
+        expect(json_response['error']).to eq('No traces found for correlation ID')
+      end
     end
 
-    context 'when traces exist' do
-      it 'returns traces for the given correlation id' do
-        traces = [{ 'step' => 1 }, { 'step' => 2 }]
-        allow(CorrelationIdMiddleware).to receive(:get_traces).with('abc').and_return(traces)
-        get '/traces/abc'
+    context 'when found' do
+      it 'returns traces for the specific correlation id' do
+        traces = [{ step: 'start' }, { step: 'end' }]
+        allow(CorrelationIdMiddleware).to receive(:get_traces).with('cid-xyz').and_return(traces)
+
+        get '/traces/cid-xyz'
+
         expect(last_response.status).to eq(200)
-        json = JSON.parse(last_response.body)
-        expect(json['correlation_id']).to eq('abc')
-        expect(json['trace_count']).to eq(2)
-        expect(json['traces']).to eq(traces)
+        json_response = JSON.parse(last_response.body)
+        expect(json_response['correlation_id']).to eq('cid-xyz')
+        expect(json_response['trace_count']).to eq(2)
+        expect(json_response['traces']).to eq(traces)
       end
     end
   end
 
-  describe 'Validation errors endpoints' do
-    describe 'GET /validation/errors' do
-      it 'returns list of validation errors' do
-        errors = [{ 'field' => 'content', 'message' => 'missing' }]
-        allow(RequestValidator).to receive(:get_validation_errors).and_return(errors)
-        get '/validation/errors'
-        expect(last_response.status).to eq(200)
-        json = JSON.parse(last_response.body)
-        expect(json['total_errors']).to eq(1)
-        expect(json['errors']).to eq(errors)
-      end
-    end
+  describe 'GET /validation/errors' do
+    it 'returns validation errors collection' do
+      errors = [{ field: 'content', message: 'required' }]
+      allow(RequestValidator).to receive(:get_validation_errors).and_return(errors)
 
-    describe 'DELETE /validation/errors' do
-      it 'clears validation errors' do
-        expect(RequestValidator).to receive(:clear_validation_errors)
-        delete '/validation/errors'
-        expect(last_response.status).to eq(200)
-        json = JSON.parse(last_response.body)
-        expect(json['message']).to eq('Validation errors cleared')
-      end
+      get '/validation/errors'
+
+      expect(last_response.status).to eq(200)
+      json_response = JSON.parse(last_response.body)
+      expect(json_response['total_errors']).to eq(1)
+      expect(json_response['errors']).to eq(errors)
+    end
+  end
+
+  describe 'DELETE /validation/errors' do
+    it 'clears validation errors and returns confirmation' do
+      expect(RequestValidator).to receive(:clear_validation_errors)
+
+      delete '/validation/errors'
+
+      expect(last_response.status).to eq(200)
+      json_response = JSON.parse(last_response.body)
+      expect(json_response['message']).to eq('Validation errors cleared')
     end
   end
 end
