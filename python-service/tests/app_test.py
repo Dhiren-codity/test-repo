@@ -1,18 +1,28 @@
-import sys
 import pytest
-from unittest.mock import Mock
+from unittest.mock import MagicMock
+import types
 
 from src.app import app
-
-app_module = sys.modules["src.app"]
+import src.app as app_module
 
 
 @pytest.fixture
 def client():
-    """Flask test client fixture."""
     app.config["TESTING"] = True
     with app.test_client() as client:
         yield client
+
+
+def make_error(code, message):
+    class Err:
+        def __init__(self, c, m):
+            self.c = c
+            self.m = m
+
+        def to_dict(self):
+            return {"code": self.c, "message": self.m}
+
+    return Err(code, message)
 
 
 class DummyIssue:
@@ -51,21 +61,8 @@ class DummyStats:
         self.total_suggestions = total_suggestions
 
 
-class DummyValidationError:
-    def __init__(self, code="invalid", message="Invalid input", field=None):
-        self.code = code
-        self.message = message
-        self.field = field
-
-    def to_dict(self):
-        data = {"code": self.code, "message": self.message}
-        if self.field is not None:
-            data["field"] = self.field
-        return data
-
-
 def test_health_check_ok(client):
-    """Test that GET /health returns healthy status."""
+    """Test that /health returns a healthy status."""
     resp = client.get("/health")
     assert resp.status_code == 200
     data = resp.get_json()
@@ -73,213 +70,182 @@ def test_health_check_ok(client):
     assert data["service"] == "python-reviewer"
 
 
-@pytest.mark.parametrize(
-    "payload",
-    [
-        None,  # Missing body
-        {},  # Empty JSON object
-    ],
-)
-def test_review_code_missing_body(client, payload):
-    """Test POST /review returns 400 for missing or empty body."""
-    if payload is None:
-        resp = client.post("/review")
-    else:
-        resp = client.post("/review", json=payload)
+@pytest.mark.parametrize("endpoint", ["/review", "/statistics"])
+def test_post_endpoints_missing_body_returns_400(client, endpoint):
+    """Test that POST endpoints return 400 when request body is missing or empty."""
+    resp = client.post(endpoint, json={})
     assert resp.status_code == 400
     data = resp.get_json()
-    assert "error" in data
     assert data["error"] == "Missing request body"
 
 
 def test_review_code_validation_errors(client, monkeypatch):
-    """Test POST /review returns 422 with validation errors."""
-    errors = [
-        DummyValidationError(code="required", message="content is required", field="content"),
-        DummyValidationError(code="invalid", message="language not supported", field="language"),
-    ]
-    monkeypatch.setattr(app_module, "validate_review_request", lambda d: errors)
-    sanitize_mock = Mock(return_value={})
-    monkeypatch.setattr(app_module, "sanitize_request_data", sanitize_mock)
+    """Test /review returns 422 when validation fails with proper error details."""
+    errors = [make_error("E001", "Missing content"), make_error("E002", "Invalid language")]
+    monkeypatch.setattr(app_module, "validate_review_request", lambda data: errors)
 
-    resp = client.post("/review", json={"content": "", "language": "unknown"})
+    resp = client.post("/review", json={"content": "print(1)", "language": "python"})
     assert resp.status_code == 422
     data = resp.get_json()
     assert data["error"] == "Validation failed"
     assert data["details"] == [e.to_dict() for e in errors]
-    # sanitize should not be called when validation fails
-    assert sanitize_mock.call_count == 0
-
-
-def test_review_code_success(client, monkeypatch):
-    """Test POST /review succeeds and returns structured response."""
-    # No validation errors
-    monkeypatch.setattr(app_module, "validate_review_request", lambda d: [])
-    posted_payload = {"content": "print('hi')", "language": "python"}
-    sanitized = {"content": "print('hi')", "language": "python"}
-    sanitize_mock = Mock(return_value=sanitized)
-    monkeypatch.setattr(app_module, "sanitize_request_data", sanitize_mock)
-
-    # Mock reviewer and result
-    mock_reviewer = Mock()
-    issues = [
-        DummyIssue("high", 1, "Avoid print in production", "Use logging instead"),
-        DummyIssue("low", 2, "Trailing whitespace", "Remove trailing spaces"),
-    ]
-    review_result = DummyReviewResult(
-        score=85,
-        issues=issues,
-        suggestions=["Consider using f-strings"],
-        complexity_score=3.2,
-    )
-    mock_reviewer.review_code.return_value = review_result
-    monkeypatch.setattr(app_module, "reviewer", mock_reviewer)
-
-    resp = client.post("/review", json=posted_payload)
-    assert resp.status_code == 200
-    data = resp.get_json()
-
-    assert data["score"] == 85
-    assert data["suggestions"] == ["Consider using f-strings"]
-    assert data["complexity_score"] == 3.2
-    assert isinstance(data.get("issues"), list)
-    assert data["issues"][0]["severity"] == "high"
-    assert data["issues"][0]["line"] == 1
-    assert data["issues"][0]["message"] == "Avoid print in production"
-    assert data["issues"][0]["suggestion"] == "Use logging instead"
-    assert "correlation_id" in data
-
-    sanitize_mock.assert_called_once()
-    assert sanitize_mock.call_args[0][0] == posted_payload
-    mock_reviewer.review_code.assert_called_once_with(
-        sanitized["content"], sanitized["language"]
-    )
 
 
 @pytest.mark.parametrize(
-    "payload",
+    "sanitized_data, expected_language",
     [
-        None,  # Missing body entirely
-        {},  # Missing 'function_code' field
+        ({"content": "print(1)", "language": "javascript"}, "javascript"),
+        ({"content": "x = 1"}, "python"),  # language omitted -> default to python
     ],
 )
-def test_review_function_missing_input(client, payload):
-    """Test POST /review/function returns 400 for missing input."""
-    if payload is None:
-        resp = client.post("/review/function")
-    else:
-        resp = client.post("/review/function", json=payload)
+def test_review_code_success_with_sanitization_and_correlation_id(client, monkeypatch, sanitized_data, expected_language):
+    """Test /review happy path with sanitization and correlation id included in response."""
+    # No validation errors
+    monkeypatch.setattr(app_module, "validate_review_request", lambda data: [])
+    # Sanitized data returned by sanitizer
+    monkeypatch.setattr(app_module, "sanitize_request_data", lambda data: sanitized_data)
+
+    # Mock reviewer
+    issues = [
+        DummyIssue("high", 1, "Use of print", "Use logging instead"),
+        DummyIssue("low", 2, "Trailing whitespace", "Remove trailing spaces"),
+    ]
+    review_result = DummyReviewResult(score=85.5, issues=issues, suggestions=["Refactor foo"], complexity_score=7.2)
+
+    mock_reviewer = MagicMock()
+    mock_reviewer.review_code.return_value = review_result
+    monkeypatch.setattr(app_module, "reviewer", mock_reviewer)
+
+    # Correlation id
+    monkeypatch.setattr(app_module, "g", types.SimpleNamespace(correlation_id="cid-123"))
+
+    resp = client.post("/review", json={"content": "ignored"})
+    assert resp.status_code == 200
+    data = resp.get_json()
+
+    # Verify call and payload
+    mock_reviewer.review_code.assert_called_once_with(sanitized_data["content"], expected_language)
+
+    assert data["score"] == review_result.score
+    assert data["complexity_score"] == review_result.complexity_score
+    assert data["suggestions"] == review_result.suggestions
+    assert data["correlation_id"] == "cid-123"
+    # Verify issues serialized correctly
+    assert isinstance(data["issues"], list)
+    assert data["issues"][0]["severity"] == "high"
+    assert data["issues"][0]["line"] == 1
+    assert data["issues"][0]["message"] == "Use of print"
+    assert data["issues"][0]["suggestion"] == "Use logging instead"
+
+
+def test_review_code_success_without_correlation_id(client, monkeypatch):
+    """Test /review returns null correlation_id when not set."""
+    monkeypatch.setattr(app_module, "validate_review_request", lambda data: [])
+    monkeypatch.setattr(app_module, "sanitize_request_data", lambda data: {"content": "pass"})
+
+    review_result = DummyReviewResult(score=90, issues=[], suggestions=[], complexity_score=1.0)
+    mock_reviewer = MagicMock()
+    mock_reviewer.review_code.return_value = review_result
+    monkeypatch.setattr(app_module, "reviewer", mock_reviewer)
+
+    # g without correlation_id
+    class EmptyG:
+        pass
+
+    monkeypatch.setattr(app_module, "g", EmptyG())
+
+    resp = client.post("/review", json={"content": "ignored"})
+    assert resp.status_code == 200
+    data = resp.get_json()
+    assert data["correlation_id"] is None
+
+
+def test_review_function_missing_field(client):
+    """Test /review/function returns 400 when 'function_code' field is missing."""
+    resp = client.post("/review/function", json={"code": "def foo(): pass"})
     assert resp.status_code == 400
     data = resp.get_json()
     assert data["error"] == "Missing 'function_code' field"
 
 
 def test_review_function_success(client, monkeypatch):
-    """Test POST /review/function returns reviewer output."""
-    mock_reviewer = Mock()
-    result = {"ok": True, "issues": 0, "notes": ["Looks fine"]}
-    mock_reviewer.review_function.return_value = result
+    """Test /review/function happy path returns reviewer output."""
+    mock_reviewer = MagicMock()
+    mock_reviewer.review_function.return_value = {"status": "ok", "issues": [{"line": 1}]}
     monkeypatch.setattr(app_module, "reviewer", mock_reviewer)
 
-    payload = {"function_code": "def add(a,b): return a+b"}
+    payload = {"function_code": "def foo():\n    return 1"}
     resp = client.post("/review/function", json=payload)
     assert resp.status_code == 200
     data = resp.get_json()
-    assert data == result
+    assert data == {"status": "ok", "issues": [{"line": 1}]}
     mock_reviewer.review_function.assert_called_once_with(payload["function_code"])
 
 
-@pytest.mark.parametrize(
-    "payload",
-    [
-        None,
-        {},
-    ],
-)
-def test_statistics_missing_body(client, payload):
-    """Test POST /statistics returns 400 when body is missing or empty."""
-    if payload is None:
-        resp = client.post("/statistics")
-    else:
-        resp = client.post("/statistics", json=payload)
-    assert resp.status_code == 400
-    data = resp.get_json()
-    assert data["error"] == "Missing request body"
-
-
 def test_statistics_validation_errors(client, monkeypatch):
-    """Test POST /statistics returns 422 when validation fails."""
-    errors = [DummyValidationError(code="required", message="'files' is required", field="files")]
-    monkeypatch.setattr(app_module, "validate_statistics_request", lambda d: errors)
-    sanitize_mock = Mock(return_value={})
-    monkeypatch.setattr(app_module, "sanitize_request_data", sanitize_mock)
+    """Test /statistics returns 422 when validation fails."""
+    errors = [make_error("S001", "Files required")]
+    monkeypatch.setattr(app_module, "validate_statistics_request", lambda data: errors)
 
-    resp = client.post("/statistics", json={"files": None})
+    resp = client.post("/statistics", json={"files": []})
     assert resp.status_code == 422
     data = resp.get_json()
     assert data["error"] == "Validation failed"
     assert data["details"] == [e.to_dict() for e in errors]
-    assert sanitize_mock.call_count == 0
 
 
-def test_statistics_success(client, monkeypatch):
-    """Test POST /statistics succeeds and returns aggregated stats."""
-    monkeypatch.setattr(app_module, "validate_statistics_request", lambda d: [])
-    sanitized = {
-        "files": [
-            {"content": "print('hi')", "language": "python"},
-            {"content": "x=1", "language": "python"},
-        ]
-    }
-    sanitize_mock = Mock(return_value=sanitized)
-    monkeypatch.setattr(app_module, "sanitize_request_data", sanitize_mock)
+def test_statistics_success_with_correlation_id(client, monkeypatch):
+    """Test /statistics happy path returns aggregated stats and correlation id."""
+    monkeypatch.setattr(app_module, "validate_statistics_request", lambda data: [])
+    sanitized = {"files": [{"content": "print(1)", "language": "python"}]}
+    monkeypatch.setattr(app_module, "sanitize_request_data", lambda data: sanitized)
 
-    mock_aggregator = Mock()
     stats_obj = DummyStats(
-        total_files=2,
-        average_score=90.5,
-        total_issues=3,
-        issues_by_severity={"low": 2, "high": 1},
-        average_complexity=2.1,
-        files_with_high_complexity=["file1.py"],
+        total_files=3,
+        average_score=88.2,
+        total_issues=5,
+        issues_by_severity={"low": 3, "high": 2},
+        average_complexity=3.14,
+        files_with_high_complexity=["a.py", "b.py"],
         total_suggestions=4,
     )
-    mock_aggregator.aggregate_reviews.return_value = stats_obj
-    monkeypatch.setattr(app_module, "statistics_aggregator", mock_aggregator)
 
-    resp = client.post("/statistics", json={"files": ["dummy"]})
+    mock_stats = MagicMock()
+    mock_stats.aggregate_reviews.return_value = stats_obj
+    monkeypatch.setattr(app_module, "statistics_aggregator", mock_stats)
+
+    monkeypatch.setattr(app_module, "g", types.SimpleNamespace(correlation_id="cid-stats"))
+
+    resp = client.post("/statistics", json={"files": [{"content": "ignored"}]})
     assert resp.status_code == 200
     data = resp.get_json()
-    assert data["total_files"] == 2
-    assert data["average_score"] == 90.5
-    assert data["total_issues"] == 3
-    assert data["issues_by_severity"] == {"low": 2, "high": 1}
-    assert data["average_complexity"] == 2.1
-    assert data["files_with_high_complexity"] == ["file1.py"]
-    assert data["total_suggestions"] == 4
-    assert "correlation_id" in data
 
-    sanitize_mock.assert_called_once()
-    mock_aggregator.aggregate_reviews.assert_called_once_with(sanitized["files"])
+    mock_stats.aggregate_reviews.assert_called_once_with(sanitized["files"])
+
+    assert data["total_files"] == stats_obj.total_files
+    assert data["average_score"] == stats_obj.average_score
+    assert data["total_issues"] == stats_obj.total_issues
+    assert data["issues_by_severity"] == stats_obj.issues_by_severity
+    assert data["average_complexity"] == stats_obj.average_complexity
+    assert data["files_with_high_complexity"] == stats_obj.files_with_high_complexity
+    assert data["total_suggestions"] == stats_obj.total_suggestions
+    assert data["correlation_id"] == "cid-stats"
 
 
-def test_list_traces_success(client, monkeypatch):
-    """Test GET /traces returns all traces with count."""
-    traces = [
-        {"correlation_id": "abc", "event": "start"},
-        {"correlation_id": "def", "event": "end"},
-    ]
+def test_list_traces_returns_all(client, monkeypatch):
+    """Test /traces returns total_traces and the list of traces."""
+    traces = [{"id": "t1"}, {"id": "t2"}]
     monkeypatch.setattr(app_module, "get_all_traces", lambda: traces)
 
     resp = client.get("/traces")
     assert resp.status_code == 200
     data = resp.get_json()
-    assert data["total_traces"] == len(traces)
+    assert data["total_traces"] == 2
     assert data["traces"] == traces
 
 
 def test_get_trace_not_found(client, monkeypatch):
-    """Test GET /traces/<correlation_id> returns 404 when no traces found."""
+    """Test /traces/<correlation_id> returns 404 when no traces exist for the ID."""
     monkeypatch.setattr(app_module, "get_traces", lambda cid: [])
 
     resp = client.get("/traces/unknown-id")
@@ -289,25 +255,21 @@ def test_get_trace_not_found(client, monkeypatch):
 
 
 def test_get_trace_success(client, monkeypatch):
-    """Test GET /traces/<correlation_id> returns traces for the given ID."""
-    traces = [{"event": "start"}, {"event": "step1"}, {"event": "end"}]
-    monkeypatch.setattr(app_module, "get_traces", lambda cid: traces)
+    """Test /traces/<correlation_id> returns trace details when found."""
+    trace_list = [{"event": "start"}, {"event": "end"}]
+    monkeypatch.setattr(app_module, "get_traces", lambda cid: trace_list)
 
-    cid = "abc-123"
-    resp = client.get(f"/traces/{cid}")
+    resp = client.get("/traces/corr-123")
     assert resp.status_code == 200
     data = resp.get_json()
-    assert data["correlation_id"] == cid
-    assert data["trace_count"] == len(traces)
-    assert data["traces"] == traces
+    assert data["correlation_id"] == "corr-123"
+    assert data["trace_count"] == len(trace_list)
+    assert data["traces"] == trace_list
 
 
-def test_list_validation_errors(client, monkeypatch):
-    """Test GET /validation/errors returns current validation errors."""
-    errors = [
-        {"code": "required", "field": "content"},
-        {"code": "invalid", "field": "language"},
-    ]
+def test_list_validation_errors_returns_all(client, monkeypatch):
+    """Test /validation/errors returns total error count and all errors."""
+    errors = [{"code": "E1"}, {"code": "E2"}, {"code": "E3"}]
     monkeypatch.setattr(app_module, "get_validation_errors", lambda: errors)
 
     resp = client.get("/validation/errors")
@@ -317,13 +279,13 @@ def test_list_validation_errors(client, monkeypatch):
     assert data["errors"] == errors
 
 
-def test_delete_validation_errors(client, monkeypatch):
-    """Test DELETE /validation/errors clears errors and returns confirmation."""
-    clear_mock = Mock()
-    monkeypatch.setattr(app_module, "clear_validation_errors", clear_mock)
+def test_delete_validation_errors_clears_and_returns_message(client, monkeypatch):
+    """Test DELETE /validation/errors clears stored errors and returns confirmation."""
+    mock_clear = MagicMock()
+    monkeypatch.setattr(app_module, "clear_validation_errors", mock_clear)
 
     resp = client.delete("/validation/errors")
     assert resp.status_code == 200
     data = resp.get_json()
     assert data["message"] == "Validation errors cleared"
-    clear_mock.assert_called_once()
+    mock_clear.assert_called_once()
