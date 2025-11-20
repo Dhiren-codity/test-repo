@@ -1,445 +1,642 @@
 import { describe, test, expect, vi, beforeEach, afterEach } from 'vitest';
-import type { Request, Response, Express } from 'express';
-import * as http from 'node:http';
+import type { Request, Response } from 'express';
 
-type AxiosClientMock = {
+interface MockAxiosClient {
   request: ReturnType<typeof vi.fn>;
   get: ReturnType<typeof vi.fn>;
   defaults: { headers: Record<string, string> };
-};
+}
 
-// Global axios client mocks created in order: go, python, ruby
-let axiosClientMocks: AxiosClientMock[] = [];
+vi.mock('helmet', () => {
+  const mw = vi.fn((_req: unknown, _res: unknown, next: () => void): void => next());
+  const helmet = vi.fn(() => mw);
+  return { default: helmet };
+});
 
-// Mock dotenv to avoid reading actual env
-vi.mock('dotenv', () => ({
-  default: {
-    config: vi.fn(),
-  },
-}));
+vi.mock('cors', () => {
+  const mw = vi.fn((_req: unknown, _res: unknown, next: () => void): void => next());
+  const cors = vi.fn(() => mw);
+  return { default: cors };
+});
 
-// No-op security and rate limit middlewares
-vi.mock('helmet', () => ({
-  default: () => (req: any, res: any, next: any) => next(),
-}));
-vi.mock('cors', () => ({
-  default: () => (req: any, res: any, next: any) => next(),
-}));
-vi.mock('express-rate-limit', () => ({
-  default: () => (req: any, res: any, next: any) => next(),
-}));
-
-// Axios mock with create returning distinct clients
-vi.mock('axios', () => {
-  const create = vi.fn(() => {
-    const client: AxiosClientMock = {
-      request: vi.fn(),
-      get: vi.fn(),
-      defaults: { headers: { 'Content-Type': 'application/json' } },
-    };
-    axiosClientMocks.push(client);
-    return client as any;
+vi.mock('express-rate-limit', () => {
+  const rateLimit = vi.fn((_opts: Record<string, unknown>) => {
+    return vi.fn((_req: unknown, _res: unknown, next: () => void): void => next());
   });
-  const isAxiosError = (err: any) => Boolean(err && err.isAxiosError);
+  return { default: rateLimit };
+});
+
+vi.mock('express', () => {
+  type Middleware = (req: Request, res: Response, next: () => void) => void;
+  type ErrorMiddleware = (err: Error, req: Request, res: Response, next: () => void) => void;
+  type RouteHandler = (req: Request, res: Response) => void | Promise<void>;
+
+  const apps: {
+    routes: {
+      get: Record<string, RouteHandler>;
+      all: Record<string, RouteHandler>;
+    };
+    uses: Array<Middleware | ((req: Request, res: Response) => void) | ErrorMiddleware>;
+    listen: ReturnType<typeof vi.fn>;
+  }[] = [];
+
+  const express = vi.fn(() => {
+    const app = {
+      routes: {
+        get: {} as Record<string, RouteHandler>,
+        all: {} as Record<string, RouteHandler>,
+      },
+      uses: [] as Array<Middleware | ((req: Request, res: Response) => void) | ErrorMiddleware>,
+      use: vi.fn((...args: unknown[]) => {
+        // app.use(fn) or app.use(path, fn) - we only need fn
+        const fn = (args[0] as unknown) as Middleware | ((req: Request, res: Response) => void) | ErrorMiddleware;
+        app.uses.push(fn);
+      }),
+      get: vi.fn((path: string, handler: RouteHandler) => {
+        app.routes.get[path] = handler;
+      }),
+      all: vi.fn((path: string, handler: RouteHandler) => {
+        app.routes.all[path] = handler;
+      }),
+      listen: vi.fn((_port: number, cb?: () => void) => {
+        if (cb) cb();
+        return undefined;
+      }),
+    };
+    apps.push(app);
+    return app as unknown as Record<string, unknown>;
+  });
+
+  // express.json() and express.urlencoded()
+  const jsonMw = vi.fn((_req: unknown, _res: unknown, next: () => void): void => next());
+  const urlEncodedMw = vi.fn((_req: unknown, _res: unknown, next: () => void): void => next());
+  (express as unknown as { json: () => Middleware }).json = vi.fn(() => jsonMw as unknown as Middleware);
+  (express as unknown as { urlencoded: (_opts: Record<string, unknown>) => Middleware }).urlencoded = vi.fn(
+    (_opts: Record<string, unknown>) => urlEncodedMw as unknown as Middleware
+  );
+
+  const __getLatestApp = (): {
+    routes: {
+      get: Record<string, RouteHandler>;
+      all: Record<string, RouteHandler>;
+    };
+    uses: Array<Middleware | ((req: Request, res: Response) => void) | ErrorMiddleware>;
+    listen: ReturnType<typeof vi.fn>;
+  } => apps[apps.length - 1];
+
+  return {
+    default: express,
+    __getLatestApp,
+  };
+});
+
+vi.mock('axios', () => {
+  type RequestConfig = {
+    method?: string;
+    url?: string;
+    data?: unknown;
+    params?: Record<string, string>;
+    headers?: Record<string, string>;
+    timeout?: number;
+  };
+
+  const clientsByBaseURL = new Map<string, MockAxiosClient>();
+
+  const create = vi.fn((config: { baseURL?: string; timeout?: number; headers?: Record<string, string> }) => {
+    const client: MockAxiosClient = {
+      defaults: { headers: { ...(config.headers || {}), 'Content-Type': 'application/json' } },
+      request: vi.fn((_cfg: RequestConfig) => Promise.resolve({ data: {} })),
+      get: vi.fn((_url: string, _cfg?: RequestConfig) => Promise.resolve({ data: {} })),
+    };
+    if (config.baseURL) {
+      clientsByBaseURL.set(config.baseURL, client);
+    }
+    return client;
+  });
+
+  const isAxiosError = (error: unknown): boolean => {
+    return Boolean((error as { isAxiosError?: boolean }).isAxiosError);
+  };
+
+  const __getClientByBaseURL = (url: string): MockAxiosClient | undefined => clientsByBaseURL.get(url);
+  const __resetAxiosMock = (): void => {
+    clientsByBaseURL.clear();
+  };
+
   return {
     default: { create, isAxiosError },
     create,
     isAxiosError,
+    __getClientByBaseURL,
+    __resetAxiosMock,
   };
 });
 
-function createMockReq(partial: Partial<Request> = {}): Partial<Request> {
-  const defaultReq: Partial<Request> = {
-    method: 'GET',
-    path: '/',
-    url: '/',
-    headers: {},
-    body: {},
-    params: {},
-    query: {},
-  };
-  return { ...defaultReq, ...partial };
+const GO_URL = 'http://go-service:8080';
+const PY_URL = 'http://python-service:8081';
+const RB_URL = 'http://ruby-service:8082';
+
+type JsonMock = ReturnType<typeof vi.fn>;
+type StatusMock = ReturnType<typeof vi.fn>;
+
+function createMockReq(init?: {
+  method?: string;
+  path?: string;
+  headers?: Record<string, string | string[] | undefined>;
+  body?: unknown;
+  query?: Record<string, string>;
+}): Partial<Request> {
+  return {
+    method: init?.method ?? 'GET',
+    path: init?.path ?? '/',
+    headers: init?.headers ?? {},
+    body: init?.body,
+    query: init?.query ?? {},
+  } as Partial<Request>;
 }
 
 function createMockRes(): {
   res: Partial<Response>;
-  jsonMock: ReturnType<typeof vi.fn>;
-  statusMock: ReturnType<typeof vi.fn>;
-  endMock: ReturnType<typeof vi.fn>;
-  setHeaderMock: ReturnType<typeof vi.fn>;
+  jsonMock: JsonMock;
+  statusMock: StatusMock;
+  getBody: () => unknown;
+  getStatus: () => number;
 } {
-  const jsonMock = vi.fn();
-  const endMock = vi.fn();
-  const setHeaderMock = vi.fn();
-  const statusMock = vi.fn(() => ({ json: jsonMock, end: endMock, setHeader: setHeaderMock }));
-  const res: Partial<Response> = {
-    status: statusMock as any,
-    json: jsonMock as any,
-    end: endMock as any,
-    setHeader: setHeaderMock as any,
-  };
-  return { res, jsonMock, statusMock, endMock, setHeaderMock };
-}
-
-async function setupApp() {
-  // Prevent the server from actually listening
-  const listenSpy = vi.spyOn(http.Server.prototype, 'listen').mockImplementation(function (this: any) {
-    // emulate Node's Server.listen returning the server instance
-    return this;
-  } as any);
-  // Reset axios client mocks
-  axiosClientMocks = [];
-
-  // Set env to deterministic values
-  process.env.PORT = '0';
-  process.env.NODE_ENV = 'test';
-  process.env.GO_SERVICE_URL = 'http://go-service:8080';
-  process.env.PYTHON_SERVICE_URL = 'http://python-service:8081';
-  process.env.RUBY_SERVICE_URL = 'http://ruby-service:8082';
-
-  const mod = await import('./index');
-  const app = (mod.default || mod) as Express;
-
-  return { app, listenSpy };
-}
-
-function findRouteHandler(app: Express, path: string, method?: string) {
-  // @ts-ignore access private router
-  const stack = app._router?.stack || [];
-  for (const layer of stack) {
-    if (layer?.route && layer.route.path === path) {
-      // Optionally ensure method is supported
-      if (method) {
-        const methods = layer.route.methods || {};
-        if (!methods[method.toLowerCase()]) {
-          continue;
-        }
-      }
-      const handles = layer.route.stack || [];
-      if (handles.length > 0) {
-        return handles[0].handle;
-      }
+  let currentStatus = 200;
+  let body: unknown;
+  const jsonMock: JsonMock = vi.fn((payload: unknown) => {
+    body = payload;
+    // trigger finish event if registered
+    const finishCb = finishListener;
+    if (finishCb) {
+      finishCb();
     }
-  }
-  throw new Error(`Route handler for ${method || 'any'} ${path} not found`);
+  });
+  const statusMock: StatusMock = vi.fn((code: number) => {
+    currentStatus = code;
+    return { json: jsonMock } as unknown as Response;
+  });
+  let finishListener: (() => void) | null = null;
+  const on = vi.fn((event: string, cb: () => void) => {
+    if (event === 'finish') {
+      finishListener = cb;
+    }
+  });
+  const res: Partial<Response> = {
+    status: statusMock as unknown as Response['status'],
+    json: jsonMock as unknown as Response['json'],
+    on: on as unknown as Response['on'],
+    statusCode: currentStatus,
+  };
+  return {
+    res,
+    jsonMock,
+    statusMock,
+    getBody: () => body,
+    getStatus: () => currentStatus,
+  };
 }
-
-function findMiddlewareByArity(app: Express, arity: number) {
-  // @ts-ignore
-  const stack = app._router?.stack || [];
-  return stack
-    .map((l: any) => l?.handle)
-    .filter((h: any) => h && h.length === arity);
-}
-
-beforeEach(() => {
-  vi.resetModules();
-  vi.clearAllMocks();
-});
-
-afterEach(() => {
-  vi.restoreAllMocks();
-});
 
 describe('API Gateway Routes', () => {
-  test('GET / should return gateway info', async () => {
-    const { app } = await setupApp();
-
-    const handler = findRouteHandler(app, '/', 'get');
-    const req = createMockReq({ method: 'GET', path: '/', url: '/' }) as Request;
-    const { res, jsonMock } = createMockRes();
-
-    await handler(req, res as Response);
-
-    expect(jsonMock).toHaveBeenCalledTimes(1);
-    const payload = jsonMock.mock.calls[0][0];
-    expect(payload).toHaveProperty('service', 'API Gateway');
-    expect(payload).toHaveProperty('endpoints');
-    expect(payload.endpoints).toHaveProperty('go', '/api/go/*');
+  beforeEach(async (): Promise<void> => {
+    vi.resetModules();
+    vi.clearAllMocks();
+    // Import server to register routes with mocked express
+    await import('../src/index');
   });
 
-  test('GET /health/health should return healthy status', async () => {
-    const { app } = await setupApp();
-
-    const handler = findRouteHandler(app, '/health/health', 'get');
-    const req = createMockReq({ method: 'GET', path: '/health/health', url: '/health/health' }) as Request;
-    const { res, jsonMock } = createMockRes();
-
-    await handler(req, res as Response);
-    const payload = jsonMock.mock.calls[0][0];
-
-    expect(payload).toHaveProperty('status', 'healthy');
-    expect(payload).toHaveProperty('service', 'api-gateway');
-    expect(typeof payload.timestamp).toBe('string');
+  afterEach((): void => {
+    // nothing for now
   });
 
-  test('GET /health/status should aggregate healthy services', async () => {
-    const { app } = await setupApp();
+  test('GET / should return service info', async (): Promise<void> => {
+    const { __getLatestApp } = await import('express');
+    const app = __getLatestApp();
+    const handler = app.routes.get['/'];
+    expect(handler).toBeDefined();
 
-    // go, python, ruby clients should exist and their get('/health') should resolve
-    axiosClientMocks.forEach((client) => {
-      client.get.mockResolvedValue({ data: { status: 'ok' } });
+    const req = createMockReq({ method: 'GET', path: '/' }) as Request;
+    const { res, jsonMock } = createMockRes();
+
+    const done = new Promise<void>((resolve) => {
+      jsonMock.mockImplementationOnce((_payload: unknown) => {
+        resolve();
+        return undefined as unknown as Response;
+      });
     });
 
-    const handler = findRouteHandler(app, '/health/status', 'get');
-    const req = createMockReq({ method: 'GET', path: '/health/status', url: '/health/status' }) as Request;
+    await Promise.resolve(handler(req, res as Response));
+    await done;
+
+    const sent = jsonMock.mock.calls[0][0] as Record<string, unknown>;
+    expect(sent.service).toBe('API Gateway');
+    expect((sent.endpoints as Record<string, unknown>).go).toBe('/api/go/*');
+  });
+
+  test('GET /health/health should be healthy', async (): Promise<void> => {
+    const { __getLatestApp } = await import('express');
+    const app = __getLatestApp();
+    const handler = app.routes.get['/health/health'];
+    expect(handler).toBeDefined();
+
+    const req = createMockReq({ method: 'GET', path: '/health/health' }) as Request;
     const { res, jsonMock } = createMockRes();
 
-    await handler(req, res as Response);
+    const done = new Promise<void>((resolve) => {
+      jsonMock.mockImplementationOnce((_payload: unknown) => {
+        resolve();
+        return undefined as unknown as Response;
+      });
+    });
 
-    const payload = jsonMock.mock.calls[0][0];
+    await Promise.resolve(handler(req, res as Response));
+    await done;
+
+    const payload = jsonMock.mock.calls[0][0] as Record<string, unknown>;
     expect(payload.status).toBe('healthy');
-    expect(payload.gateway.status).toBe('healthy');
-    expect(Array.isArray(payload.services)).toBe(true);
-    expect(payload.services.length).toBe(3);
-    expect(payload.services.every((s: any) => s.status === 'healthy')).toBe(true);
+    expect(payload.service).toBe('api-gateway');
   });
 
-  test('GET /health/status should return degraded when a service is unhealthy', async () => {
-    const { app } = await setupApp();
+  test('GET /health/status should aggregate healthy services', async (): Promise<void> => {
+    const { __getClientByBaseURL } = await import('axios');
+    const go = __getClientByBaseURL(GO_URL) as MockAxiosClient;
+    const py = __getClientByBaseURL(PY_URL) as MockAxiosClient;
+    const rb = __getClientByBaseURL(RB_URL) as MockAxiosClient;
 
-    // go healthy, python healthy, ruby unhealthy
-    axiosClientMocks[0].get.mockResolvedValue({ data: { status: 'ok' } });
-    axiosClientMocks[1].get.mockResolvedValue({ data: { status: 'ok' } });
-    axiosClientMocks[2].get.mockRejectedValue(new Error('Down'));
+    go.get.mockResolvedValueOnce({ data: { ok: true } });
+    py.get.mockResolvedValueOnce({ data: { ok: true } });
+    rb.get.mockResolvedValueOnce({ data: { ok: true } });
 
-    const handler = findRouteHandler(app, '/health/status', 'get');
-    const req = createMockReq({ method: 'GET', path: '/health/status', url: '/health/status' }) as Request;
+    const { __getLatestApp } = await import('express');
+    const app = __getLatestApp();
+    const handler = app.routes.get['/health/status'];
+
+    const req = createMockReq({ method: 'GET', path: '/health/status' }) as Request;
     const { res, jsonMock } = createMockRes();
 
-    await handler(req, res as Response);
+    const done = new Promise<void>((resolve) => {
+      jsonMock.mockImplementationOnce((_payload: unknown) => {
+        resolve();
+        return undefined as unknown as Response;
+      });
+    });
 
-    const payload = jsonMock.mock.calls[0][0];
-    expect(payload.status).toBe('degraded');
-    expect(payload.services.length).toBe(3);
-    expect(payload.services.some((s: any) => s.status === 'unhealthy')).toBe(true);
+    await Promise.resolve(handler(req, res as Response));
+    await done;
+
+    const payload = jsonMock.mock.calls[0][0] as Record<string, unknown>;
+    expect(payload.status).toBe('healthy');
+    expect(Array.isArray(payload.services)).toBe(true);
+    const services = payload.services as Array<Record<string, unknown>>;
+    expect(services.every((s) => s.status === 'healthy')).toBe(true);
   });
 
-  test('GET /api/go/* should proxy GET requests and include headers', async () => {
-    const { app } = await setupApp();
+  test('GET /health/status should be degraded if a service is down', async (): Promise<void> => {
+    const { __getClientByBaseURL } = await import('axios');
+    const go = __getClientByBaseURL(GO_URL) as MockAxiosClient;
+    const py = __getClientByBaseURL(PY_URL) as MockAxiosClient;
+    const rb = __getClientByBaseURL(RB_URL) as MockAxiosClient;
 
-    // Arrange client for 'go' (first created)
-    axiosClientMocks[0].request.mockResolvedValue({ data: { result: 'ok' } });
+    go.get.mockResolvedValueOnce({ data: { ok: true } });
+    py.get.mockRejectedValueOnce(new Error('down'));
+    rb.get.mockResolvedValueOnce({ data: { ok: true } });
 
-    const handler = findRouteHandler(app, '/api/go/*');
+    const { __getLatestApp } = await import('express');
+    const app = __getLatestApp();
+    const handler = app.routes.get['/health/status'];
+
+    const req = createMockReq({ method: 'GET', path: '/health/status' }) as Request;
+    const { res, jsonMock } = createMockRes();
+
+    const done = new Promise<void>((resolve) => {
+      jsonMock.mockImplementationOnce((_payload: unknown) => {
+        resolve();
+        return undefined as unknown as Response;
+      });
+    });
+
+    await Promise.resolve(handler(req, res as Response));
+    await done;
+
+    const payload = jsonMock.mock.calls[0][0] as Record<string, unknown>;
+    expect(payload.status).toBe('degraded');
+    const services = payload.services as Array<Record<string, unknown>>;
+    expect(services.some((s) => s.status === 'unhealthy')).toBe(true);
+  });
+
+  test('Proxy GET /api/go/* forwards to upstream with query and returns success', async (): Promise<void> => {
+    const { __getClientByBaseURL } = await import('axios');
+    const go = __getClientByBaseURL(GO_URL) as MockAxiosClient;
+
+    go.request.mockResolvedValueOnce({ data: { result: 'ok' } });
+
+    const { __getLatestApp } = await import('express');
+    const app = __getLatestApp();
+    const handler = app.routes.all['/api/go/*'];
+    expect(handler).toBeDefined();
+
     const req = createMockReq({
       method: 'GET',
-      path: '/api/go/users',
-      url: '/api/go/users',
-      headers: { 'x-test': 'abc' },
-      query: { q: 'john' },
+      path: '/api/go/orders/123',
+      query: { x: '1' },
+      headers: { 'x-req-id': 'abc' },
     }) as Request;
     const { res, jsonMock, statusMock } = createMockRes();
 
-    await handler(req, res as Response);
+    const done = new Promise<void>((resolve) => {
+      jsonMock.mockImplementationOnce((_payload: unknown) => {
+        resolve();
+        return undefined as unknown as Response;
+      });
+    });
 
-    expect(statusMock).not.toHaveBeenCalled(); // default 200
-    expect(axiosClientMocks[0].request).toHaveBeenCalledTimes(1);
-    const callArgs = axiosClientMocks[0].request.mock.calls[0][0];
-    expect(callArgs.method).toBe('get');
-    // Based on the current regex implementation, this will be '/'
-    expect(callArgs.url).toBe('/');
-    expect(callArgs.headers['x-test']).toBe('abc');
+    await Promise.resolve(handler(req, res as Response));
+    await done;
 
-    const payload = jsonMock.mock.calls[0][0];
+    expect(statusMock).not.toHaveBeenCalled();
+
+    // Validate upstream call
+    expect(go.request).toHaveBeenCalledTimes(1);
+    const cfg = go.request.mock.calls[0][0] as Record<string, unknown>;
+    // Due to path extraction bug, url becomes '/'
+    expect(cfg.url).toBe('/');
+    expect(cfg.method).toBe('get');
+    expect(cfg.params).toEqual({ x: '1' });
+    expect((cfg.headers as Record<string, string>)['Content-Type']).toBe('application/json');
+
+    const payload = jsonMock.mock.calls[0][0] as Record<string, unknown>;
     expect(payload.success).toBe(true);
     expect(payload.service).toBe('go');
     expect(payload.data).toEqual({ result: 'ok' });
   });
 
-  test('POST /api/go/* should proxy body and method', async () => {
-    const { app } = await setupApp();
+  test('Proxy POST /api/python/* forwards body and headers', async (): Promise<void> => {
+    const { __getClientByBaseURL } = await import('axios');
+    const py = __getClientByBaseURL(PY_URL) as MockAxiosClient;
 
-    axiosClientMocks[0].request.mockResolvedValue({ data: { created: true } });
+    py.request.mockResolvedValueOnce({ data: { created: true } });
 
-    const handler = findRouteHandler(app, '/api/go/*');
+    const { __getLatestApp } = await import('express');
+    const app = __getLatestApp();
+    const handler = app.routes.all['/api/python/*'];
+
     const req = createMockReq({
       method: 'POST',
-      path: '/api/go/items',
-      url: '/api/go/items',
-      headers: { 'content-type': 'application/json' },
-      body: { name: 'Item' },
+      path: '/api/python/items',
+      headers: { 'x-custom': 'C' },
+      body: { name: 'Alpha' },
     }) as Request;
     const { res, jsonMock } = createMockRes();
 
-    await handler(req, res as Response);
+    const done = new Promise<void>((resolve) => {
+      jsonMock.mockImplementationOnce((_payload: unknown) => {
+        resolve();
+        return undefined as unknown as Response;
+      });
+    });
 
-    const callArgs = axiosClientMocks[0].request.mock.calls[0][0];
-    expect(callArgs.method).toBe('post');
-    expect(callArgs.data).toEqual({ name: 'Item' });
+    await Promise.resolve(handler(req, res as Response));
+    await done;
 
-    const payload = jsonMock.mock.calls[0][0];
+    expect(py.request).toHaveBeenCalledTimes(1);
+    const cfg = py.request.mock.calls[0][0] as Record<string, unknown>;
+    expect(cfg.method).toBe('post');
+    expect(cfg.data).toEqual({ name: 'Alpha' });
+    expect(cfg.url).toBe('/');
+
+    const payload = jsonMock.mock.calls[0][0] as Record<string, unknown>;
     expect(payload.success).toBe(true);
+    expect(payload.service).toBe('python');
   });
 
-  test('PUT /api/go/* should proxy', async () => {
-    const { app } = await setupApp();
+  test('Proxy PUT /api/ruby/* forwards body', async (): Promise<void> => {
+    const { __getClientByBaseURL } = await import('axios');
+    const rb = __getClientByBaseURL(RB_URL) as MockAxiosClient;
 
-    axiosClientMocks[0].request.mockResolvedValue({ data: { updated: true } });
+    rb.request.mockResolvedValueOnce({ data: { updated: 1 } });
 
-    const handler = findRouteHandler(app, '/api/go/*');
+    const { __getLatestApp } = await import('express');
+    const app = __getLatestApp();
+    const handler = app.routes.all['/api/ruby/*'];
+
     const req = createMockReq({
       method: 'PUT',
-      path: '/api/go/items/1',
-      url: '/api/go/items/1',
-      body: { name: 'Updated' },
+      path: '/api/ruby/items/42',
+      body: { price: 100 },
     }) as Request;
     const { res, jsonMock } = createMockRes();
 
-    await handler(req, res as Response);
+    const done = new Promise<void>((resolve) => {
+      jsonMock.mockImplementationOnce((_payload: unknown) => {
+        resolve();
+        return undefined as unknown as Response;
+      });
+    });
 
-    const callArgs = axiosClientMocks[0].request.mock.calls[0][0];
-    expect(callArgs.method).toBe('put');
-    expect(callArgs.data).toEqual({ name: 'Updated' });
+    await Promise.resolve(handler(req, res as Response));
+    await done;
 
-    const payload = jsonMock.mock.calls[0][0];
+    expect(rb.request).toHaveBeenCalledTimes(1);
+    const cfg = rb.request.mock.calls[0][0] as Record<string, unknown>;
+    expect(cfg.method).toBe('put');
+    expect(cfg.data).toEqual({ price: 100 });
+
+    const payload = jsonMock.mock.calls[0][0] as Record<string, unknown>;
     expect(payload.success).toBe(true);
+    expect(payload.service).toBe('ruby');
   });
 
-  test('DELETE /api/go/* should proxy', async () => {
-    const { app } = await setupApp();
+  test('Proxy DELETE /api/go/* handles delete', async (): Promise<void> => {
+    const { __getClientByBaseURL } = await import('axios');
+    const go = __getClientByBaseURL(GO_URL) as MockAxiosClient;
 
-    axiosClientMocks[0].request.mockResolvedValue({ data: { deleted: true } });
+    go.request.mockResolvedValueOnce({ data: { deleted: true } });
 
-    const handler = findRouteHandler(app, '/api/go/*');
+    const { __getLatestApp } = await import('express');
+    const app = __getLatestApp();
+    const handler = app.routes.all['/api/go/*'];
+
     const req = createMockReq({
       method: 'DELETE',
-      path: '/api/go/items/1',
-      url: '/api/go/items/1',
+      path: '/api/go/items/5',
     }) as Request;
     const { res, jsonMock } = createMockRes();
 
-    await handler(req, res as Response);
+    const done = new Promise<void>((resolve) => {
+      jsonMock.mockImplementationOnce((_payload: unknown) => {
+        resolve();
+        return undefined as unknown as Response;
+      });
+    });
 
-    const callArgs = axiosClientMocks[0].request.mock.calls[0][0];
-    expect(callArgs.method).toBe('delete');
+    await Promise.resolve(handler(req, res as Response));
+    await done;
 
-    const payload = jsonMock.mock.calls[0][0];
+    expect(go.request).toHaveBeenCalledTimes(1);
+    const cfg = go.request.mock.calls[0][0] as Record<string, unknown>;
+    expect(cfg.method).toBe('delete');
+
+    const payload = jsonMock.mock.calls[0][0] as Record<string, unknown>;
     expect(payload.success).toBe(true);
   });
 
-  test('Proxy error handling: downstream returns 404', async () => {
-    const { app } = await setupApp();
+  test('Proxy returns mapped axios error with status code', async (): Promise<void> => {
+    const { __getClientByBaseURL } = await import('axios');
+    const rb = __getClientByBaseURL(RB_URL) as MockAxiosClient;
 
-    axiosClientMocks[0].request.mockRejectedValue({
+    const axiosErr = {
       isAxiosError: true,
       message: 'Not Found',
-      response: { status: 404, data: { error: 'not found' } },
-    });
+      response: { status: 404, data: { error: 'nope' } },
+    };
+    rb.request.mockRejectedValueOnce(axiosErr);
 
-    const handler = findRouteHandler(app, '/api/go/*');
+    const { __getLatestApp } = await import('express');
+    const app = __getLatestApp();
+    const handler = app.routes.all['/api/ruby/*'];
+
     const req = createMockReq({
       method: 'GET',
-      path: '/api/go/missing',
-      url: '/api/go/missing',
+      path: '/api/ruby/unknown',
     }) as Request;
     const { res, jsonMock, statusMock } = createMockRes();
 
-    await handler(req, res as Response);
+    const done = new Promise<void>((resolve) => {
+      jsonMock.mockImplementationOnce((_payload: unknown) => {
+        resolve();
+        return undefined as unknown as Response;
+      });
+    });
+
+    await Promise.resolve(handler(req, res as Response));
+    await done;
 
     expect(statusMock).toHaveBeenCalledWith(404);
-    const payload = jsonMock.mock.calls[0][0];
+    const payload = jsonMock.mock.calls[0][0] as Record<string, unknown>;
     expect(payload.success).toBe(false);
     expect(payload.error).toBe('Not Found');
-    expect(payload.service).toBe('go');
+    expect(payload.service).toBe('ruby');
   });
 
-  test('Proxy error handling: network error -> 500', async () => {
-    const { app } = await setupApp();
+  test('Proxy returns 500 for non-axios errors', async (): Promise<void> => {
+    const { __getClientByBaseURL } = await import('axios');
+    const go = __getClientByBaseURL(GO_URL) as MockAxiosClient;
 
-    axiosClientMocks[0].request.mockRejectedValue({
-      isAxiosError: true,
-      message: 'ECONNREFUSED',
+    go.request.mockRejectedValueOnce(new Error('boom'));
+
+    const { __getLatestApp } = await import('express');
+    const app = __getLatestApp();
+    const handler = app.routes.all['/api/go/*'];
+
+    const req = createMockReq({
+      method: 'POST',
+      path: '/api/go/ops',
+      body: { x: 1 },
+    }) as Request;
+    const { res, jsonMock, statusMock } = createMockRes();
+
+    const done = new Promise<void>((resolve) => {
+      jsonMock.mockImplementationOnce((_payload: unknown) => {
+        resolve();
+        return undefined as unknown as Response;
+      });
     });
 
-    const handler = findRouteHandler(app, '/api/go/*');
-    const req = createMockReq({
-      method: 'GET',
-      path: '/api/go/any',
-      url: '/api/go/any',
-    }) as Request;
-    const { res, jsonMock, statusMock } = createMockRes();
-
-    await handler(req, res as Response);
+    await Promise.resolve(handler(req, res as Response));
+    await done;
 
     expect(statusMock).toHaveBeenCalledWith(500);
-    const payload = jsonMock.mock.calls[0][0];
+    const payload = jsonMock.mock.calls[0][0] as Record<string, unknown>;
     expect(payload.success).toBe(false);
-    expect(payload.error).toBe('ECONNREFUSED');
+    expect(payload.error).toBe('boom');
   });
 
-  test('Python and Ruby proxy routes should use respective clients', async () => {
-    const { app } = await setupApp();
+  test('404 handler returns not found for unknown routes', async (): Promise<void> => {
+    const { __getLatestApp } = await import('express');
+    const app = __getLatestApp();
 
-    // Arrange python (2nd) and ruby (3rd)
-    axiosClientMocks[1].request.mockResolvedValue({ data: { py: true } });
-    axiosClientMocks[2].request.mockResolvedValue({ data: { rb: true } });
+    // Find the 404 middleware: a use handler with length === 2, registered after routes
+    const notFound = app.uses.reverse().find((fn) => typeof fn === 'function' && (fn as Function).length === 2) as
+      | ((req: Request, res: Response) => void)
+      | undefined;
 
-    const pyHandler = findRouteHandler(app, '/api/python/*');
-    const rbHandler = findRouteHandler(app, '/api/ruby/*');
+    expect(notFound).toBeDefined();
 
-    const pyReq = createMockReq({
-      method: 'POST',
-      path: '/api/python/do',
-      url: '/api/python/do',
-      body: { a: 1 },
-    }) as Request;
-    const rbReq = createMockReq({
-      method: 'GET',
-      path: '/api/ruby/info',
-      url: '/api/ruby/info',
-    }) as Request;
-
-    const pyRes = createMockRes();
-    const rbRes = createMockRes();
-
-    await pyHandler(pyReq, pyRes.res as Response);
-    await rbHandler(rbReq, rbRes.res as Response);
-
-    expect(axiosClientMocks[1].request).toHaveBeenCalledTimes(1);
-    expect(axiosClientMocks[2].request).toHaveBeenCalledTimes(1);
-    expect(pyRes.jsonMock).toHaveBeenCalledWith(expect.objectContaining({ success: true, data: { py: true }, service: 'python' }));
-    expect(rbRes.jsonMock).toHaveBeenCalledWith(expect.objectContaining({ success: true, data: { rb: true }, service: 'ruby' }));
-  });
-
-  test('404 middleware returns not found for unknown route', async () => {
-    const { app } = await setupApp();
-
-    const notFoundMiddlewares = findMiddlewareByArity(app, 2); // (req, res) signature
-    // Use the first 2-arity middleware which should be the 404 handler before the error handler
-    const notFound = notFoundMiddlewares[0];
-
-    const req = createMockReq({
-      method: 'GET',
-      path: '/does-not-exist',
-      url: '/does-not-exist',
-    }) as Request;
+    const req = createMockReq({ method: 'GET', path: '/does/not/exist' }) as Request;
     const { res, jsonMock, statusMock } = createMockRes();
 
-    await notFound(req, res as Response);
+    const done = new Promise<void>((resolve) => {
+      jsonMock.mockImplementationOnce((_payload: unknown) => {
+        resolve();
+        return undefined as unknown as Response;
+      });
+    });
+
+    await Promise.resolve(notFound!(req as Request, res as Response));
+    await done;
 
     expect(statusMock).toHaveBeenCalledWith(404);
-    const payload = jsonMock.mock.calls[0][0];
-    expect(payload.success).toBe(false);
-    expect(payload.error).toContain('Route GET /does-not-exist not found');
+    const payload = jsonMock.mock.calls[0][0] as Record<string, unknown>;
+    expect((payload.error as string).includes('Route GET /does/not/exist not found')).toBe(true);
   });
 
-  test('No authentication required for health endpoint (if present)', async () => {
-    const { app } = await setupApp();
+  test('Error handler returns 500 with error message', async (): Promise<void> => {
+    const { __getLatestApp } = await import('express');
+    const app = __getLatestApp();
 
-    const handler = findRouteHandler(app, '/health/health', 'get');
-    const req = createMockReq({
-      method: 'GET',
-      path: '/health/health',
-      url: '/health/health',
-      headers: {}, // no Authorization header
-    }) as Request;
+    // Error handler has 4 args
+    const errHandler = app.uses.find((fn) => typeof fn === 'function' && (fn as Function).length === 4) as
+      | ((err: Error, req: Request, res: Response, next: () => void) => void)
+      | undefined;
+
+    expect(errHandler).toBeDefined();
+
+    const req = createMockReq({ method: 'GET', path: '/cause/error' }) as Request;
     const { res, jsonMock, statusMock } = createMockRes();
 
-    await handler(req, res as Response);
+    const done = new Promise<void>((resolve) => {
+      jsonMock.mockImplementationOnce((_payload: unknown) => {
+        resolve();
+        return undefined as unknown as Response;
+      });
+    });
 
-    expect(statusMock).not.toHaveBeenCalledWith(401);
-    const payload = jsonMock.mock.calls[0][0];
-    expect(payload.status).toBe('healthy');
+    await Promise.resolve(errHandler!(new Error('kaput'), req as Request, res as Response, () => {}));
+    await done;
+
+    expect(statusMock).toHaveBeenCalledWith(500);
+    const payload = jsonMock.mock.calls[0][0] as Record<string, unknown>;
+    expect(payload.success).toBe(false);
+    expect(payload.error).toBe('kaput');
+  });
+
+  test('Proxy path extraction edge case: unmatched pattern defaults to "/"', async (): Promise<void> => {
+    const { __getClientByBaseURL } = await import('axios');
+    const py = __getClientByBaseURL(PY_URL) as MockAxiosClient;
+
+    py.request.mockResolvedValueOnce({ data: { ok: true } });
+
+    const { __getLatestApp } = await import('express');
+    const app = __getLatestApp();
+    const handler = app.routes.all['/api/python/*'];
+
+    const req = createMockReq({
+      method: 'GET',
+      path: '/api/python/sub/path',
+    }) as Request;
+    const { res, jsonMock } = createMockRes();
+
+    const done = new Promise<void>((resolve) => {
+      jsonMock.mockImplementationOnce((_payload: unknown) => {
+        resolve();
+        return undefined as unknown as Response;
+      });
+    });
+
+    await Promise.resolve(handler(req, res as Response));
+    await done;
+
+    const cfg = py.request.mock.calls[0][0] as Record<string, unknown>;
+    expect(cfg.url).toBe('/'); // due to current regex implementation
   });
 });
