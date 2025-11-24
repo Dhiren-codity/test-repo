@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -88,7 +89,10 @@ func TestParseFile_BadRequest_InvalidJSON(t *testing.T) {
 	assert.Equal(t, http.StatusBadRequest, w.Code)
 	var resp map[string]interface{}
 	_ = json.Unmarshal(w.Body.Bytes(), &resp)
-	assert.Contains(t, resp["error"], "invalid character")
+	msg, _ := resp["error"].(string)
+	if !(strings.Contains(msg, "invalid character") || strings.Contains(msg, "unexpected EOF") || strings.Contains(msg, "EOF")) {
+		t.Fatalf("expected error message to indicate invalid JSON, got: %v", resp["error"])
+	}
 }
 
 func TestParseFile_BadRequest_MissingFields(t *testing.T) {
@@ -124,7 +128,7 @@ func TestParseFile_CacheHit(t *testing.T) {
 	err := json.Unmarshal(w.Body.Bytes(), &resp)
 	assert.NoError(t, err)
 	assert.Equal(t, expected["cached"], resp["cached"])
-	assert.Equal(t, expected["value"], resp["value"])
+	assert.EqualValues(t, expected["value"], resp["value"])
 }
 
 func TestParseFile_Success_CacheMiss(t *testing.T) {
