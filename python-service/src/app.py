@@ -40,6 +40,8 @@ def cached(prefix):
                     del cache[cache_key]
 
             result = f(*args, **kwargs)
+            if isinstance(result, tuple):
+                return result
             response_data = result.get_json()
 
             cache[cache_key] = {
