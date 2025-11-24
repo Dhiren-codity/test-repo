@@ -17,6 +17,7 @@ class PolyglotAPI < Sinatra::Base
   configure do
     set :go_service_url, ENV['GO_SERVICE_URL'] || 'http://localhost:8080'
     set :python_service_url, ENV['PYTHON_SERVICE_URL'] || 'http://localhost:8081'
+    set :cache_service_url, ENV['CACHE_SERVICE_URL'] || 'http://localhost:8083'
   end
 
   get '/health' do
@@ -27,9 +28,76 @@ class PolyglotAPI < Sinatra::Base
     services_status = {
       ruby: { status: 'healthy' },
       go: check_service_health(settings.go_service_url),
-      python: check_service_health(settings.python_service_url)
+      python: check_service_health(settings.python_service_url),
+      cache: check_service_health(settings.cache_service_url)
     }
     json services: services_status
+  end
+
+  get '/cache/stats' do
+    begin
+      response = HTTParty.get("#{settings.cache_service_url}/cache/stats", timeout: 3)
+      json JSON.parse(response.body)
+    rescue StandardError => e
+      json error: e.message
+    end
+  end
+
+  post '/cache/invalidate' do
+    begin
+      body = request.body.read
+      request.body.rewind
+      request_data = body.empty? ? params : JSON.parse(body)
+    rescue JSON::ParserError
+      request_data = params
+    end
+
+    service = request_data['service'] || request_data[:service]
+    key = request_data['key'] || request_data[:key]
+
+    return json(error: 'Missing service parameter'), 400 unless service
+
+    begin
+      response = HTTParty.post(
+        "#{settings.cache_service_url}/cache/invalidate",
+        body: { service: service, key: key }.to_json,
+        headers: { 'Content-Type' => 'application/json' },
+        timeout: 3
+      )
+      json JSON.parse(response.body)
+    rescue StandardError => e
+      json error: e.message
+    end
+  end
+
+  post '/cache/invalidate-all' do
+    cleared_services = []
+
+    begin
+      HTTParty.post("#{settings.go_service_url}/cache/clear", timeout: 3)
+      cleared_services << 'go'
+    rescue StandardError => e
+      cleared_services << "go (failed: #{e.message})"
+    end
+
+    begin
+      HTTParty.post("#{settings.python_service_url}/cache/clear", timeout: 3)
+      cleared_services << 'python'
+    rescue StandardError => e
+      cleared_services << "python (failed: #{e.message})"
+    end
+
+    begin
+      HTTParty.post("#{settings.cache_service_url}/cache/invalidate-all", timeout: 3)
+      cleared_services << 'cache'
+    rescue StandardError => e
+      cleared_services << "cache (failed: #{e.message})"
+    end
+
+    json(
+      message: 'Cache invalidation completed',
+      cleared_services: cleared_services
+    )
   end
 
   post '/analyze' do
