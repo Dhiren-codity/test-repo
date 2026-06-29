@@ -17,6 +17,7 @@ CORS(app)
 reviewer = CodeReviewer()
 
 cache = {}
+# The module-level cache is shared by threaded WSGI workers in this process.
 cache_lock = threading.Lock()
 CACHE_TTL = 300
 
