@@ -2,6 +2,7 @@ import sys
 import os
 import hashlib
 import time
+import threading
 from functools import wraps
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -16,6 +17,7 @@ CORS(app)
 reviewer = CodeReviewer()
 
 cache = {}
+cache_lock = threading.Lock()
 CACHE_TTL = 300
 
 
@@ -32,25 +34,28 @@ def cached(prefix):
             content = data.get("content", "") if data else ""
             cache_key = generate_cache_key(prefix, content)
 
-            if cache_key in cache:
-                entry = cache[cache_key]
-                if time.time() < entry["expires_at"]:
+            with cache_lock:
+                entry = cache.get(cache_key)
+                if entry and time.time() < entry["expires_at"]:
                     return jsonify({**entry["data"], "cached": True})
-                else:
-                    del cache[cache_key]
 
-            result = f(*args, **kwargs)
-            if isinstance(result, tuple):
-                return result
-            response_data = result.get_json()
+                if entry:
+                    cache.pop(cache_key, None)
 
-            cache[cache_key] = {
-                "data": response_data,
-                "expires_at": time.time() + CACHE_TTL
-            }
+                result = f(*args, **kwargs)
+                if isinstance(result, tuple):
+                    return result
+                response_data = result.get_json()
+
+                cache[cache_key] = {
+                    "data": response_data,
+                    "expires_at": time.time() + CACHE_TTL,
+                }
 
             return jsonify({**response_data, "cached": False})
+
         return wrapper
+
     return decorator
 
 
@@ -105,22 +110,27 @@ def review_function():
 
 @app.route("/cache/clear", methods=["POST"])
 def clear_cache():
-    cache.clear()
+    with cache_lock:
+        cache.clear()
     return jsonify({"message": "Cache cleared successfully"})
 
 
 @app.route("/cache/stats", methods=["GET"])
 def cache_stats():
-    active_entries = sum(1 for entry in cache.values()
-                        if time.time() < entry["expires_at"])
-    expired_entries = len(cache) - active_entries
+    current_time = time.time()
+    with cache_lock:
+        total_entries = len(cache)
+        active_entries = sum(1 for entry in cache.values() if current_time < entry["expires_at"])
+        expired_entries = total_entries - active_entries
 
-    return jsonify({
-        "total_entries": len(cache),
-        "active_entries": active_entries,
-        "expired_entries": expired_entries,
-        "cache_ttl": CACHE_TTL
-    })
+    return jsonify(
+        {
+            "total_entries": total_entries,
+            "active_entries": active_entries,
+            "expired_entries": expired_entries,
+            "cache_ttl": CACHE_TTL,
+        }
+    )
 
 
 if __name__ == "__main__":
