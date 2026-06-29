@@ -2,10 +2,13 @@ require 'digest'
 require 'json'
 
 class CacheManager
-  def initialize(max_size = 1000)
+  DEFAULT_MAX_HISTORY_SIZE = 1000
+
+  def initialize(max_size = 1000, max_history_size = DEFAULT_MAX_HISTORY_SIZE)
     @cache = {}
     @access_times = {}
     @max_size = max_size
+    @max_history_size = max_history_size
     @hit_count = 0
     @miss_count = 0
     @cache_history = []
@@ -82,10 +85,17 @@ class CacheManager
       timestamp: Time.now,
       cache_size: @cache.size
     }
+
+    trim_history
   end
 
   def calculate_hit_rate
     total = @hit_count + @miss_count
     total > 0 ? (@hit_count.to_f / total * 100).round(2) : 0.0
+  end
+
+  def trim_history
+    excess_entries = @cache_history.length - @max_history_size
+    @cache_history.shift(excess_entries) if excess_entries.positive?
   end
 end

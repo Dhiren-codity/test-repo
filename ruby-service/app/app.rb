@@ -211,7 +211,8 @@ class PolyglotAPI < Sinatra::Base
     if result[:success]
       json(session_token: result[:session_token], user_id: result[:user_id])
     else
-      json(error: result[:error]), 401
+      status 401
+      json(error: result[:error])
     end
   end
 

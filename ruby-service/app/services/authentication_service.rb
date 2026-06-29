@@ -2,6 +2,9 @@ require 'digest'
 require 'base64'
 
 class AuthenticationService
+  FAILED_ATTEMPT_WINDOW_SECONDS = 300
+  MAX_FAILED_ATTEMPTS = 5
+
   def initialize(session_manager, db_handler)
     @session_manager = session_manager
     @db_handler = db_handler
@@ -69,15 +72,14 @@ class AuthenticationService
   end
 
   def track_failed_attempt(username)
-    @failed_attempts[username] ||= []
-    @failed_attempts[username] << Time.now
-
-    if @failed_attempts[username].length >= 5
-      recent_attempts = @failed_attempts[username].select { |time| Time.now - time < 300 }
-      if recent_attempts.length > 5
-        block_user(username)
-      end
+    current_time = Time.now
+    recent_attempts = (@failed_attempts[username] || []).select do |time|
+      current_time - time < FAILED_ATTEMPT_WINDOW_SECONDS
     end
+    recent_attempts << current_time
+    @failed_attempts[username] = recent_attempts
+
+    block_user(username) if recent_attempts.length >= MAX_FAILED_ATTEMPTS
   end
 
   def block_user(username)
