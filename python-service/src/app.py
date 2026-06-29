@@ -35,6 +35,7 @@ def cached(prefix):
             content = data.get("content", "") if data else ""
             cache_key = generate_cache_key(prefix, content)
 
+            # Keep cache misses inside the lock so check-then-set stays atomic.
             with cache_lock:
                 entry = cache.get(cache_key)
                 if entry and time.time() < entry["expires_at"]:
