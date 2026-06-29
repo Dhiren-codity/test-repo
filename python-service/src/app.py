@@ -121,6 +121,7 @@ def clear_cache():
 def cache_stats():
     current_time = time.time()
     with cache_lock:
+        # Build a consistent cache snapshot while writers are excluded.
         total_entries = len(cache)
         active_entries = sum(1 for entry in cache.values() if current_time < entry["expires_at"])
         expired_entries = total_entries - active_entries
