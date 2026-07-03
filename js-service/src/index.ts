@@ -1,9 +1,28 @@
-import express, { Request, Response } from 'express';
+import crypto from 'crypto';
+import express, { NextFunction, Request, Response } from 'express';
 import cors from 'cors';
 import axios from 'axios';
 
 const app = express();
-app.use(cors());
+
+const allowedCorsOrigins = (process.env.CORS_ALLOWED_ORIGINS || 'http://localhost:3000,http://localhost:5173')
+  .split(',')
+  .map((origin) => origin.trim())
+  .filter(Boolean);
+const allowedCorsOriginSet = new Set(allowedCorsOrigins);
+const CACHE_ADMIN_SECRET = process.env.CACHE_ADMIN_SECRET || '';
+
+app.use(cors({
+  origin: (origin, callback) => {
+    if (!origin || allowedCorsOriginSet.has(origin)) {
+      callback(null, true);
+      return;
+    }
+    callback(new Error('Origin not allowed by CORS'));
+  },
+  allowedHeaders: ['Content-Type', 'X-Cache-Admin-Secret'],
+  methods: ['GET', 'POST', 'OPTIONS']
+}));
 app.use(express.json());
 
 interface CacheStats {
@@ -25,6 +44,27 @@ const serviceCache: Map<string, CacheEntry> = new Map();
 const GO_SERVICE_URL = process.env.GO_SERVICE_URL || 'http://localhost:8080';
 const PYTHON_SERVICE_URL = process.env.PYTHON_SERVICE_URL || 'http://localhost:8081';
 const RUBY_SERVICE_URL = process.env.RUBY_SERVICE_URL || 'http://localhost:8082';
+
+function secretsMatch(provided: string, expected: string): boolean {
+  const providedBuffer = Buffer.from(provided);
+  const expectedBuffer = Buffer.from(expected);
+
+  return providedBuffer.length === expectedBuffer.length
+    && crypto.timingSafeEqual(providedBuffer, expectedBuffer);
+}
+
+function requireCacheAdminSecret(req: Request, res: Response, next: NextFunction) {
+  if (!CACHE_ADMIN_SECRET) {
+    return res.status(503).json({ error: 'Cache admin secret not configured' });
+  }
+
+  const providedSecret = req.get('X-Cache-Admin-Secret') || '';
+  if (!providedSecret || !secretsMatch(providedSecret, CACHE_ADMIN_SECRET)) {
+    return res.status(401).json({ error: 'Unauthorized' });
+  }
+
+  next();
+}
 
 app.get('/health', (req: Request, res: Response) => {
   res.json({ status: 'healthy', service: 'js-cache' });
@@ -53,7 +93,7 @@ app.get('/cache/stats', (req: Request, res: Response) => {
   });
 });
 
-app.post('/cache/invalidate', (req: Request, res: Response) => {
+app.post('/cache/invalidate', requireCacheAdminSecret, (req: Request, res: Response) => {
   const { service, key } = req.body;
 
   if (!service) {
@@ -81,7 +121,7 @@ app.post('/cache/invalidate', (req: Request, res: Response) => {
   }
 });
 
-app.post('/cache/invalidate-all', (req: Request, res: Response) => {
+app.post('/cache/invalidate-all', requireCacheAdminSecret, (req: Request, res: Response) => {
   serviceCache.clear();
   res.json({
     message: 'All caches cleared across all services',
@@ -123,7 +163,7 @@ app.get('/cache/services', async (req: Request, res: Response) => {
   });
 });
 
-app.post('/cache/record', (req: Request, res: Response) => {
+app.post('/cache/record', requireCacheAdminSecret, (req: Request, res: Response) => {
   const { service, key, hit } = req.body;
 
   if (!service) {
