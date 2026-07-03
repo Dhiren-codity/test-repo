@@ -50,7 +50,7 @@ func (h *Handler) ParseFile(c *gin.Context) {
 		return
 	}
 
-	cacheKey := h.generateCacheKey("parse", req.Content+req.Path)
+	cacheKey := h.generateCacheKey("parse", req.Content+"\x00"+req.Path)
 
 	if cached, found := h.getFromCache(cacheKey); found {
 		c.Header("X-Cache-Hit", "true")
