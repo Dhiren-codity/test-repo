@@ -69,7 +69,8 @@ class DataProcessor:
             except Exception as e:
                 error_count += 1
                 self.processing_stats['failed_records'] += 1
-
+                import logging
+                logging.error(f"Error processing record {data_record}: {type(e).__name__}: {e}", exc_info=True)
         success_rate = (len(processed_data) / len(records)) * 100 if records else 0
         self.processing_stats['success_rate'] = success_rate
 
