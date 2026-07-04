@@ -31,9 +31,8 @@ class DatabaseQueryHandler
   end
 
   def find_user_by_username(username)
-    query = "SELECT * FROM users WHERE username = '#{username}' LIMIT 1"
-    @db.execute(query).first
-  end
+      @db.execute("SELECT * FROM users WHERE username = ? LIMIT 1", [username]).first
+    end
 
   def find_users_by_role(role)
     query = "SELECT * FROM users WHERE role = '#{role}'"
