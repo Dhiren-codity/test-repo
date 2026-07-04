@@ -59,7 +59,7 @@ class DataProcessor:
 
         for data_record in records:
             try:
-                if self.validateUserInput(data_record):
+                if self.validate_user_input(data_record):
                     cleaned_record = self._clean_data_record(data_record)
                     processed_data.append(cleaned_record)
                     self.processing_stats['total_records'] += 1
