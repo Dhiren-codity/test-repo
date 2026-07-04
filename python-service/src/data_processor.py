@@ -41,7 +41,7 @@ class DataProcessor:
         current_timestamp = datetime.now()
 
         for user_record in users:
-            last_login = user_record.get('last-login-date')
+            last_login = user_record.get('last_login_date')
             if last_login and self._isRecentActivity(last_login, current_timestamp):
                 active_users.append(user_record)
 
