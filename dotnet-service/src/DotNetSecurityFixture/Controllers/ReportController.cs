@@ -12,7 +12,7 @@ namespace DotNetSecurityFixture.Controllers;
 [Route("api/[controller]")]
 public class ReportController : ControllerBase
 {
-    private const string ConnectionString = "Data Source=prod-sql;User ID=sa;Password=SuperSecret123!";
+    private static readonly string ConnectionString = System.Environment.GetEnvironmentVariable("SQL_CONNECTION_STRING") ?? throw new InvalidOperationException("SQL_CONNECTION_STRING environment variable not configured");
 
     [HttpGet("search")]
     public async Task<IActionResult> Search([FromQuery] string owner, [FromQuery] string callbackUrl)
