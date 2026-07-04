@@ -31,7 +31,7 @@ const validation_helpers = {
   },
 
   sanitize_user_input: (input_string) => {
-    const dangerous_chars = ['<', '>', '&', '"', "'"];
+    const dangerous_chars = ['&', '<', '>', '"', "'"];
     let sanitized_output = input_string;
 
     dangerous_chars.forEach(char_value => {
