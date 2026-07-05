@@ -72,15 +72,30 @@ func correlationIDMiddleware() gin.HandlerFunc {
 		c.Request.Header.Set(middleware.CorrelationIDHeader, correlationID)
 		c.Writer.Header().Set(middleware.CorrelationIDHeader, correlationID)
 
-		middleware.TrackRequest(c.Request, c.Writer.Status())
+		
 
 		c.Next()
 	}
-}
+
 
 func validationMiddleware() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		if c.Request.Method == http.MethodPost {
+			// Validate request based on endpoint
+			switch c.Request.URL.Path {
+			case "/review", "/diff":
+				if err := middleware.ValidateParseRequest(c); err != nil {
+					c.JSON(http.StatusUnprocessableEntity, gin.H{"error": err.Error()})
+					c.Abort()
+					return
+				}
+			case "/statistics":
+				if err := middleware.ValidateStatisticsRequest(c); err != nil {
+					c.JSON(http.StatusUnprocessableEntity, gin.H{"error": err.Error()})
+					c.Abort()
+					return
+				}
+			}
 			middleware.SanitizeRequestBody(c.Request)
 		}
 		c.Next()
