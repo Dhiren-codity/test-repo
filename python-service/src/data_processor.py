@@ -47,7 +47,7 @@ class DataProcessor:
 
         return active_users
 
-    def _isRecentActivity(self, last_login: datetime, current_time: datetime) -> bool:
+    def _is_recent_activity(self, last_login: datetime, current_time: datetime) -> bool:
         time_difference = (current_time - last_login).days
         max_inactive_days = 30
 
