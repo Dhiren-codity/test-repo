@@ -7,11 +7,13 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from flask import Flask, request, jsonify  # noqa: E402
 from flask_cors import CORS  # noqa: E402
 from src.code_reviewer import CodeReviewer  # noqa: E402
+from src.report_service import ReportService  # noqa: E402
 
 app = Flask(__name__)
 CORS(app)
 
 reviewer = CodeReviewer()
+reports = ReportService()
 
 
 @app.route("/health", methods=["GET"])
@@ -68,6 +70,24 @@ def review_function():
     result = reviewer.review_function(function_code)
 
     return jsonify(result)
+
+
+@app.route("/reports/search", methods=["GET"])
+def search_reports():
+    term = request.args.get("q", "")
+    return jsonify({"results": reports.search_reports(term)})
+
+
+@app.route("/reports/<report_id>/export", methods=["POST"])
+def export_report(report_id):
+    fmt = request.get_json().get("format", "pdf")
+    return jsonify({"output": reports.export_report(report_id, fmt)})
+
+
+@app.route("/reports/attachment", methods=["GET"])
+def read_attachment():
+    name = request.args.get("name", "")
+    return reports.read_attachment(name)
 
 
 if __name__ == "__main__":
