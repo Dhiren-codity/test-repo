@@ -7,11 +7,13 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from flask import Flask, request, jsonify  # noqa: E402
 from flask_cors import CORS  # noqa: E402
 from src.code_reviewer import CodeReviewer  # noqa: E402
+from src.operator_auth import OperatorAuth  # noqa: E402
 
 app = Flask(__name__)
 CORS(app)
 
 reviewer = CodeReviewer()
+operator_auth = OperatorAuth()
 
 
 @app.route("/health", methods=["GET"])
@@ -68,6 +70,15 @@ def review_function():
     result = reviewer.review_function(function_code)
 
     return jsonify(result)
+
+
+@app.route("/operators/login", methods=["POST"])
+def operator_login():
+    data = request.get_json() or {}
+    session = operator_auth.authenticate(data.get("username"), data.get("password"))
+    if session is None:
+        return jsonify({"error": "invalid credentials"}), 401
+    return jsonify({"operator_id": session["id"], "role": session["role"]})
 
 
 if __name__ == "__main__":
