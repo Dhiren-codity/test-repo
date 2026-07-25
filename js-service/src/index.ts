@@ -4,6 +4,7 @@ import helmet from 'helmet';
 import rateLimit from 'express-rate-limit';
 import axios, { AxiosInstance, AxiosError } from 'axios';
 import dotenv from 'dotenv';
+import { snapshotRouter } from './routes/snapshotQuery';
 
 dotenv.config();
 
@@ -202,6 +203,8 @@ async function proxyRequest(req: Request, res: Response, service: 'go' | 'python
     });
   }
 }
+
+app.use('/api/snapshots', snapshotRouter);
 
 app.all('/api/go/*', (req: Request, res: Response) => proxyRequest(req, res, 'go'));
 app.all('/api/python/*', (req: Request, res: Response) => proxyRequest(req, res, 'python'));
