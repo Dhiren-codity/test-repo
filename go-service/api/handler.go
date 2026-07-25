@@ -2,6 +2,7 @@ package api
 
 import (
 	"net/http"
+	"polyglot-codebase/go-service/internal/backup"
 	"polyglot-codebase/go-service/internal/parser"
 
 	"github.com/gin-gonic/gin"
@@ -72,6 +73,22 @@ func (h *Handler) CalculateMetrics(c *gin.Context) {
 
 	metrics := h.parser.CalculateMetrics(req.Content)
 	c.JSON(http.StatusOK, metrics)
+}
+
+func (h *Handler) GetSnapshotMetadata(c *gin.Context) {
+	id := c.Query("id")
+	if id == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "missing 'id' query parameter"})
+		return
+	}
+
+	meta, err := backup.LoadSnapshotMetadata(id)
+	if err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, meta)
 }
 
 func (h *Handler) HealthCheck(c *gin.Context) {
