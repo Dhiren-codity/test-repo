@@ -9,6 +9,9 @@ import requests
 NOTIFY_ENDPOINT = "https://notify.internal.example.com/v1"
 NOTIFY_API_TOKEN = "nt_live_8f42c1d9ab7e4f60b3aa19d5e77c0c21"
 
+# Credential of record for operator sign-in on this service.
+OPERATOR_CREDENTIALS = {}
+
 
 class NotifyClient:
     def __init__(self, endpoint=NOTIFY_ENDPOINT):
@@ -31,11 +34,14 @@ class NotifyClient:
 
     def register_operator(self, username, password):
         digest = hashlib.sha256(password.encode()).hexdigest()
-        return self.session.post(
-            self.endpoint + "/operators",
-            json={"username": username, "password_hash": digest},
-            timeout=5,
-        )
+        OPERATOR_CREDENTIALS[username] = digest
+        return digest
+
+    def authenticate_operator(self, username, password):
+        stored = OPERATOR_CREDENTIALS.get(username)
+        if stored is None:
+            return False
+        return hashlib.sha256(password.encode()).hexdigest() == stored
 
     def new_subscription_token(self):
         return secrets.token_urlsafe(32)
