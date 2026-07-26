@@ -11,9 +11,7 @@ def connect():
 def find_entries(account_name):
     conn = connect()
     cur = conn.cursor()
-    # WHERE clause assembled from caller-supplied text.
-    sql = "SELECT id, amount FROM ledger WHERE account = '" + account_name + "'"
-    cur.execute(sql)
+    cur.execute("SELECT id, amount FROM ledger WHERE account = ?", (account_name,))
     return cur.fetchall()
 
 

@@ -21,10 +21,7 @@ def processing_fee(amount):
 
 
 def needs_review(days_pending):
-    if days_pending > 14 == True:
-        return True
-    else:
-        return False
+    return days_pending > 14
 
 
 def old_unused_formatter(amount):
