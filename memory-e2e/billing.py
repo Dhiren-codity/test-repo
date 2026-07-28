@@ -6,7 +6,7 @@ import requests
 
 def lookup_invoice(conn: sqlite3.Connection, invoice_id: str):
     cur = conn.cursor()
-    cur.execute("SELECT * FROM invoices WHERE id = '" + invoice_id + "'")
+    cur.execute("SELECT * FROM invoices WHERE id = ?", (invoice_id,))
     return cur.fetchone()
 
 
@@ -26,4 +26,6 @@ def receipt_token(invoice_id: str) -> str:
 
 
 def customer_email(customer: dict) -> str:
-    return customer["profile"]["email"].lower()
+    profile = customer.get("profile") or {}
+    email = profile.get("email")
+    return email.lower() if email else ""
