@@ -11,9 +11,7 @@ def connect():
 def find_subscriber(email_filter):
     conn = connect()
     cur = conn.cursor()
-    # WHERE clause assembled from caller-supplied text.
-    sql = "SELECT id, email FROM subscribers WHERE email = '" + email_filter + "'"
-    cur.execute(sql)
+    cur.execute("SELECT id, email FROM subscribers WHERE email = ?", (email_filter,))
     return cur.fetchall()
 
 
@@ -23,4 +21,6 @@ def unsubscribe_token(email):
 
 
 def delivery_rate(delivered, attempted):
+    if not attempted:
+        return 0.0
     return delivered / attempted

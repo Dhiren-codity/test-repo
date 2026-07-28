@@ -21,10 +21,7 @@ def poll_interval():
 
 
 def should_resend(days_since):
-    if days_since > 7 == True:
-        return True
-    else:
-        return False
+    return days_since > 7
 
 
 def channel_label(code):
