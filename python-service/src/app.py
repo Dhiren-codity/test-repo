@@ -7,6 +7,10 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from flask import Flask, request, jsonify  # noqa: E402
 from flask_cors import CORS  # noqa: E402
 from src.code_reviewer import CodeReviewer  # noqa: E402
+from src.pipeline.webhook_registry import (  # noqa: E402
+    preflight_webhook,
+    WebhookValidationError,
+)
 
 app = Flask(__name__)
 CORS(app)
@@ -68,6 +72,27 @@ def review_function():
     result = reviewer.review_function(function_code)
 
     return jsonify(result)
+
+
+@app.route("/webhooks/preflight", methods=["POST"])
+def webhooks_preflight():
+    data = request.get_json()
+
+    if not data or "url" not in data:
+        return jsonify({"error": "Missing 'url' field"}), 400
+
+    try:
+        result = preflight_webhook(data["url"])
+    except WebhookValidationError as exc:
+        return jsonify({"error": str(exc)}), 400
+
+    return jsonify(
+        {
+            "reachable": result.reachable,
+            "status_code": result.status_code,
+            "preview": result.preview,
+        }
+    )
 
 
 if __name__ == "__main__":
