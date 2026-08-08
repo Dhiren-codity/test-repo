@@ -40,7 +40,7 @@ func (h *Handler) ParseFile(c *gin.Context) {
 
 	file, err := h.parser.ParseFile(req.Content, req.Path)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
 

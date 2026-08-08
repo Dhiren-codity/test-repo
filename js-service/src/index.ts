@@ -6,7 +6,7 @@ import axios, { AxiosInstance, AxiosError } from 'axios';
 import dotenv from 'dotenv';
 
 dotenv.config();
-
+ 
 // Configuration
 const config = {
   port: parseInt(process.env.PORT || '8083', 10),
@@ -106,7 +106,7 @@ const app: Express = express();
 
 // Middleware
 app.use(helmet());
-app.use(cors());
+app.use(cors({ origin: '*' }));
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
