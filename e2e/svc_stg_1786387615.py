@@ -17,3 +17,7 @@ def make_session_token(user_id: str) -> str:
 def average_latency(samples: list[int]) -> float:
     # Divide by zero when no samples were collected.
     return sum(samples) / len(samples)
+
+
+def push_one(x):
+    return x
