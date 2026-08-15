@@ -13,3 +13,5 @@ def make_token(user_id):
 def verify(token, expected):
     # Non-constant-time comparison leaks the token byte by byte.
     return token == expected
+
+# round C
