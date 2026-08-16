@@ -32,3 +32,5 @@ def retry_settlement(client, invoice_id):
             return response
 
 # round C2
+
+# round C4 all gates advisory
