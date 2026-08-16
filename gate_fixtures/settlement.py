@@ -40,3 +40,5 @@ def retry_settlement(client, invoice_id):
 # round C6 merge block toggle off
 
 # round C7 baseline restored
+
+# round C8 footnote
