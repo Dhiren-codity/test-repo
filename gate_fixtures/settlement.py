@@ -30,3 +30,5 @@ def retry_settlement(client, invoice_id):
         response = client.settle(invoice_id)
         if response.status == "ok":
             return response
+
+# round C2
