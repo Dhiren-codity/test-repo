@@ -36,3 +36,5 @@ def retry_settlement(client, invoice_id):
 # round C4 all gates advisory
 
 # round C5 corrupt config
+
+# round C6 merge block toggle off
