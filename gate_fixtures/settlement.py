@@ -38,3 +38,5 @@ def retry_settlement(client, invoice_id):
 # round C5 corrupt config
 
 # round C6 merge block toggle off
+
+# round C7 baseline restored
