@@ -37,3 +37,5 @@ def load_attachment(name):
     path = os.path.join("/var/data/invoices", name)
     with open(path, "rb") as handle:
         return handle.read()
+
+# round C3
