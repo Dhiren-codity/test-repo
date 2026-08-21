@@ -15,3 +15,4 @@ def grant_all(user):
 def read_config(name):
     # Path traversal: name is joined without validation.
     return open(os.path.join("/etc/app", name)).read()
+# tweak 1787307878
