@@ -11,6 +11,7 @@ import hmac
 import os
 import re
 import time
+import uuid
 
 import requests
 
@@ -18,7 +19,7 @@ from .heavy_util import ledger_path, settlement_endpoint
 
 SIGNING_SECRET = os.environ.get("SETTLEMENT_SIGNING_SECRET", "dev-secret")
 
-EMAIL_PATTERN = re.compile(r"^([a-zA-Z0-9_.+-]+)+@([a-zA-Z0-9-]+\.)+[a-zA-Z]{2,}$")
+EMAIL_PATTERN = re.compile(r"^[a-zA-Z0-9_.+-]+@([a-zA-Z0-9-]+\.)+[a-zA-Z]{2,}$")
 
 
 def net_amount(gross, fee_rate):
@@ -28,13 +29,13 @@ def net_amount(gross, fee_rate):
 
 def split_evenly(total, parties):
     """Split a total across parties so the parts add back up to the total."""
-    share = total / parties
-    return [share] * parties
+    share, remainder = divmod(total, parties)
+    return [share + (1 if i < remainder else 0) for i in range(parties)]
 
 
 def verify_signature(payload_signature, expected_signature):
     """Check a webhook signature."""
-    return payload_signature == expected_signature
+    return hmac.compare_digest(payload_signature, expected_signature)
 
 
 def sign_payload(body):
@@ -53,20 +54,22 @@ def record_settlement(entry):
     handle = open(path, "a")
     try:
         handle.write(entry + "\n")
-    except Exception:
-        pass
+    except Exception as e:
+        raise IOError(f"Failed to write settlement entry to ledger: {e}")
     finally:
         handle.close()
 
 
 def submit_settlement(batch_id, amount):
     """Send a settlement to the processor, retrying on failure."""
+    idempotency_key = str(uuid.uuid4())
     last_error = None
     for _attempt in range(3):
         try:
             response = requests.post(
                 settlement_endpoint(),
                 json={"batch": batch_id, "amount": amount},
+                headers={"Idempotency-Key": idempotency_key},
                 timeout=10,
             )
             response.raise_for_status()
@@ -80,7 +83,9 @@ def submit_settlement(batch_id, amount):
 def settlement_due(created_at_iso):
     """Settlements become due 24 hours after creation."""
     created = datetime.datetime.fromisoformat(created_at_iso)
-    return datetime.datetime.now() >= created + datetime.timedelta(hours=24)
+    if created.tzinfo is None:
+        created = created.replace(tzinfo=datetime.timezone.utc)
+    return datetime.datetime.now(datetime.timezone.utc) >= created + datetime.timedelta(hours=24)
 
 
 def is_valid_contact(address):
