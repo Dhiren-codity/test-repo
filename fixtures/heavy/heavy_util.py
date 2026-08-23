@@ -12,7 +12,7 @@ def invoice_dir():
 
 def safe_name(name):
     """Return the on-disk name for a user-supplied invoice name."""
-    return name
+    return os.path.basename(name)
 
 
 def parse_amount(raw):
