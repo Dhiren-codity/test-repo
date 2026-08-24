@@ -21,7 +21,7 @@ module Spaceship
 
       # Only available with Apple ID auth
       attr_accessor :distribution_type
-      attr_accessor :educationDiscountType
+      attr_accessor :education_discount_type
 
       module ContentRightsDeclaration
         USES_THIRD_PARTY_CONTENT = "USES_THIRD_PARTY_CONTENT"
@@ -113,6 +113,7 @@ module Spaceship
       # Check Tunes patch_app method for explanation how to use territory_ids parameter with allow_removing_from_sale to remove app from sale
       def update(client: nil, attributes: nil, app_price_tier_id: nil, territory_ids: nil, allow_removing_from_sale: false)
         client ||= Spaceship::ConnectAPI
+        attributes ||= {}
         attributes = reverse_attr_mapping(attributes)
         return client.patch_app(app_id: id, attributes: attributes, app_price_tier_id: app_price_tier_id, territory_ids: territory_ids, allow_removing_from_sale: allow_removing_from_sale)
       end
