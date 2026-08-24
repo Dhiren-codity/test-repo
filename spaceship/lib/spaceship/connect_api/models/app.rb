@@ -21,7 +21,7 @@ module Spaceship
 
       # Only available with Apple ID auth
       attr_accessor :distribution_type
-      attr_accessor :educationDiscountType
+      attr_accessor :education_discount_type
 
       module ContentRightsDeclaration
         USES_THIRD_PARTY_CONTENT = "USES_THIRD_PARTY_CONTENT"
