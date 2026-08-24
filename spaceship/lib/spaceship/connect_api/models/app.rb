@@ -21,7 +21,7 @@ module Spaceship
 
       # Only available with Apple ID auth
       attr_accessor :distribution_type
-      attr_accessor :educationDiscountType
+      attr_accessor :education_discount_type
 
       module ContentRightsDeclaration
         USES_THIRD_PARTY_CONTENT = "USES_THIRD_PARTY_CONTENT"
@@ -104,7 +104,7 @@ module Spaceship
         )
       end
 
-      def self.get(client: nil, app_id: nil, includes: "appStoreVersions")
+      def self.get(client: nil, app_id: nil, includes: ESSENTIAL_INCLUDES)
         client ||= Spaceship::ConnectAPI
         return client.get_app(app_id: app_id, includes: includes).first
       end
@@ -491,6 +491,7 @@ module Spaceship
 
       def add_users(client: nil, user_ids: nil)
         client ||= Spaceship::ConnectAPI
+        user_ids ||= []
         user_ids.each do |user_id|
           client.add_user_visible_apps(user_id: user_id, app_ids: [id])
         end
@@ -498,6 +499,7 @@ module Spaceship
 
       def remove_users(client: nil, user_ids: nil)
         client ||= Spaceship::ConnectAPI
+        user_ids ||= []
         user_ids.each do |user_id|
           client.delete_user_visible_apps(user_id: user_id, app_ids: [id])
         end
